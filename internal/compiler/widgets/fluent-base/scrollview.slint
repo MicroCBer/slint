@@ -39,6 +39,11 @@ component ScrollBar inherits Rectangle {
     in-out property <length> value;
     in property <bool> enabled;
 
+    animate value {
+        duration: 130ms;
+        easing: ease-in-out;
+    }
+
     private property <length> offset: 16px;
     private property <length> size: 2px;
     private property <length> track-size: root.horizontal ? root.width - 2 * root.offset : root.height - 2 * offset;
