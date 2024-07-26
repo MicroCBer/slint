@@ -56,6 +56,8 @@ pub struct Flickable {
 
     data: FlickableDataBox,
 
+    pub animated_scroll: Property<bool>,
+
     /// FIXME: remove this
     pub cached_rendering_data: CachedRenderingData,
 }
@@ -331,6 +333,7 @@ impl FlickableData {
                     (Flickable::FIELD_OFFSETS.viewport_x).apply_pin(flick).get(),
                     (Flickable::FIELD_OFFSETS.viewport_y).apply_pin(flick).get(),
                 );
+                let animated = (Flickable::FIELD_OFFSETS.animated_scroll).apply_pin(flick).get();
                 let delta = if window_adapter.window().0.modifiers.get().shift()
                     && !cfg!(target_os = "macos")
                 {
@@ -344,8 +347,19 @@ impl FlickableData {
                 let viewport_x = (Flickable::FIELD_OFFSETS.viewport_x).apply_pin(flick);
                 let viewport_y = (Flickable::FIELD_OFFSETS.viewport_y).apply_pin(flick);
                 let old_pos = (viewport_x.get(), viewport_y.get());
-                viewport_x.set(new_pos.x_length());
-                viewport_y.set(new_pos.y_length());
+                if animated {
+                    let anim = PropertyAnimation {
+                        duration: 200,
+                        easing: EasingCurve::EaseInOutElastic,
+                        ..PropertyAnimation::default()
+                    };
+                    viewport_x.set_animated_value(new_pos.x_length(), anim.clone());
+                    viewport_y.set_animated_value(new_pos.y_length(), anim);
+                } else {
+                    viewport_x.set(new_pos.x_length());
+                    viewport_y.set(new_pos.y_length());
+                }
+
                 if old_pos.0 != new_pos.x_length() || old_pos.1 != new_pos.y_length() {
                     (Flickable::FIELD_OFFSETS.flicked).apply_pin(flick).call(&());
                 }

@@ -95,7 +95,7 @@ export component ScrollView {
     in-out property <length> viewport-height <=> flickable.viewport-height;
     in-out property <length> viewport-x <=> flickable.viewport-x;
     in-out property <length> viewport-y <=> flickable.viewport-y;
-
+    in-out property <bool> animated-scroll <=> flickable.animated-scroll;
     min-height: 50px;
     min-width: 50px;
     horizontal-stretch: 1;
@@ -110,7 +110,7 @@ export component ScrollView {
         viewport-x <=> horizontal-bar.value;
         width: parent.width - vertical-bar.width - 4px;
         height: parent.height - horizontal-bar.height - 4px;
-
+        
         @children
     }
 
