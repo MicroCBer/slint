@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use crate::types::{SlintPoint, SlintSize};
 use i_slint_core::window::WindowAdapterRc;
@@ -122,5 +122,41 @@ impl JsWindow {
     #[napi(js_name = "requestRedraw")]
     pub fn request_redraw(&self) {
         self.inner.request_redraw();
+    }
+
+    /// Returns if the window is currently fullscreen
+    #[napi(getter)]
+    pub fn get_fullscreen(&self) -> bool {
+        self.inner.window().is_fullscreen()
+    }
+
+    /// Set or unset the window to display fullscreen.
+    #[napi(setter)]
+    pub fn set_fullscreen(&self, enable: bool) {
+        self.inner.window().set_fullscreen(enable)
+    }
+
+    /// Returns if the window is currently maximized
+    #[napi(getter)]
+    pub fn get_maximized(&self) -> bool {
+        self.inner.window().is_maximized()
+    }
+
+    /// Maximize or unmaximize the window.
+    #[napi(setter)]
+    pub fn set_maximized(&self, maximized: bool) {
+        self.inner.window().set_maximized(maximized)
+    }
+
+    /// Returns if the window is currently minimized
+    #[napi(getter)]
+    pub fn get_minimized(&self) -> bool {
+        self.inner.window().is_minimized()
+    }
+
+    /// Minimize or unminimze the window.
+    #[napi(setter)]
+    pub fn set_minimized(&self, minimized: bool) {
+        self.inner.window().set_minimized(minimized)
     }
 }

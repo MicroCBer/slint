@@ -1,5 +1,5 @@
 # Copyright © SixtyFPS GmbH <info@slint.dev>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 cmake_minimum_required(VERSION 3.21)
 # Select C++ and C as languages, as Corrosion needs ${CMAKE_C_COMPILER}
@@ -13,12 +13,12 @@ include(FetchContent)
 FetchContent_Declare(
     Corrosion
     GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.4.5
+    GIT_TAG v0.4.9
 )
 FetchContent_MakeAvailable(Corrosion)
 
 list(PREPEND CMAKE_MODULE_PATH ${Corrosion_SOURCE_DIR}/cmake)
-find_package(Rust 1.70 REQUIRED MODULE)
+find_package(Rust 1.73 REQUIRED MODULE)
 
 option(BUILD_SHARED_LIBS "Build Slint as shared library" ON)
 option(SLINT_FEATURE_COMPILER "Enable support for compiling .slint files to C++ ahead of time" ON)
@@ -34,6 +34,7 @@ function(define_cargo_feature cargo_feature description default)
     # turn foo-bar into SLINT_FEATURE_FOO_BAR
     string(TOUPPER "${cargo_feature}" cmake_option)
     string(REPLACE "-" "_" cmake_option "${cmake_option}")
+    list(APPEND public_cmake_features ${cmake_option})
     set(cmake_option "SLINT_FEATURE_${cmake_option}")
     option("${cmake_option}" "${description}" ${default})
 
@@ -42,6 +43,7 @@ function(define_cargo_feature cargo_feature description default)
     endif()
 
     set(features "${features}" PARENT_SCOPE)
+    set(public_cmake_features "${public_cmake_features}" PARENT_SCOPE)
     add_feature_info(${cmake_option} ${cmake_option} ${description})
 endfunction()
 
@@ -49,6 +51,7 @@ function(define_cargo_dependent_feature cargo_feature description default depend
     # turn foo-bar into SLINT_FEATURE_FOO_BAR
     string(TOUPPER "${cargo_feature}" cmake_option)
     string(REPLACE "-" "_" cmake_option "${cmake_option}")
+    list(APPEND public_cmake_features ${cmake_option})
     set(cmake_option "SLINT_FEATURE_${cmake_option}")
     cmake_dependent_option("${cmake_option}" "${description}" ${default} ${depends_condition} OFF)
 
@@ -57,11 +60,12 @@ function(define_cargo_dependent_feature cargo_feature description default depend
     endif()
 
     set(features "${features}" PARENT_SCOPE)
+    set(public_cmake_features "${public_cmake_features}" PARENT_SCOPE)
     add_feature_info(${cmake_option} ${cmake_option} ${description})
 endfunction()
 
 # Features that are mapped to features in the Rust crate. These and their
-# defaults need to be kept in sync with the Rust bit.
+# defaults need to be kept in sync with the Rust bit (cpp/Cargo.toml and cbindgen.rs)
 
 define_cargo_feature(freestanding "Enable use of freestanding environment. This is only for bare-metal systems. Most other features are incompatible with this one" OFF)
 
@@ -93,13 +97,20 @@ define_cargo_dependent_feature(renderer-skia-opengl "Enable support for the Skia
 define_cargo_dependent_feature(renderer-skia-vulkan "Enable support for the Skia based rendering engine with its Vulkan backend." OFF "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_feature(renderer-software "Enable support for the software renderer" OFF)
 
-define_cargo_dependent_feature(backend-qt "Enable Qt based rendering backend" ON "NOT SLINT_FEATURE_FREESTANDING")
+set(SLINT_BACKEND_QT_DEFAULT OFF)
+if(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+  set(SLINT_BACKEND_QT_DEFAULT ON)
+endif()
+define_cargo_dependent_feature(backend-qt "Enable Qt based rendering backend" ${SLINT_BACKEND_QT_DEFAULT} "NOT SLINT_FEATURE_FREESTANDING")
 
-define_cargo_dependent_feature(backend-linuxkms "Enable support for the backend that renders a single window fullscreen on Linux (Experimental)" OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(backend-linuxkms "Enable support for the backend that renders a single window fullscreen on Linux. Requires libseat. If you don't have libseat, select `backend-linuxkms-noseat` instead. (Experimental)" OFF "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(backend-linuxkms-noseat "Enable support for the backend that renders a single window fullscreen on Linux (Experimental)" OFF "NOT SLINT_FEATURE_FREESTANDING")
 
 define_cargo_dependent_feature(gettext "Enable support of translations using gettext" OFF "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_dependent_feature(accessibility "Enable integration with operating system provided accessibility APIs" ON "NOT SLINT_FEATURE_FREESTANDING")
+define_cargo_dependent_feature(testing "Enable support for testing API (experimental)" ON "NOT SLINT_FEATURE_FREESTANDING")
 define_cargo_feature(experimental "Enable experimental features. (No backward compatibility guarantees)" OFF)
+define_cargo_dependent_feature(system-testing "Enable system testing support (experimental)" OFF "SLINT_FEATURE_EXPERIMENTAL AND NOT SLINT_FEATURE_FREESTANDING")
 
 if (SLINT_BUILD_RUNTIME)
     if(SLINT_FEATURE_COMPILER AND NOT SLINT_COMPILER)
@@ -108,11 +119,11 @@ if (SLINT_BUILD_RUNTIME)
 
     if(BUILD_SHARED_LIBS)
         set(rustc_lib_type "cdylib")
-        set(slint_cpp_impl "slint-cpp-shared")
+        set(slint_cpp_impl "slint_cpp-shared")
         set(cmake_lib_type "SHARED")
     else()
         set(rustc_lib_type "staticlib")
-        set(slint_cpp_impl "slint-cpp-static")
+        set(slint_cpp_impl "slint_cpp-static")
         set(cmake_lib_type "STATIC")
     endif()
 
@@ -137,23 +148,37 @@ if (SLINT_BUILD_RUNTIME)
     # target property doesn't propagate :(
     if (APPLE AND SLINT_IS_TOPLEVEL_BUILD AND BUILD_SHARED_LIBS)
         # corrosion could provide the Cargo.toml package version as a CMake target property.
-        corrosion_add_target_local_rustflags(slint-cpp -Clink-arg=-Wl,-install_name,@rpath/libslint_cpp.dylib,-current_version,${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR},-compatibility_version,${PROJECT_VERSION_MAJOR}.0)
+        corrosion_add_target_local_rustflags(slint_cpp -Clink-arg=-Wl,-install_name,@rpath/libslint_cpp.dylib,-current_version,${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR},-compatibility_version,${PROJECT_VERSION_MAJOR}.0)
         # Set this one to false again explicitely because Corrosion will starting setting this property to true by default.
-        set_target_properties(slint-cpp-shared PROPERTIES IMPORTED_NO_SONAME 0)
-        set_target_properties(slint-cpp-shared PROPERTIES IMPORTED_SONAME libslint_cpp.dylib)
+        set_target_properties(slint_cpp-shared PROPERTIES IMPORTED_NO_SONAME 0)
+        set_target_properties(slint_cpp-shared PROPERTIES IMPORTED_SONAME libslint_cpp.dylib)
     endif()
 
     add_library(Slint INTERFACE)
     add_library(Slint::Slint ALIAS Slint)
-    target_link_libraries(Slint INTERFACE slint-cpp)
+    target_link_libraries(Slint INTERFACE slint_cpp)
     target_compile_features(Slint INTERFACE cxx_std_20)
     if (MSVC)
         target_compile_options(Slint INTERFACE /bigobj)
     endif()
 
+    foreach(feature ${public_cmake_features})
+        set(cmake_option "SLINT_FEATURE_${feature}")
+        if(${cmake_option})
+            list(APPEND enabled_features ${feature})
+        else()
+            list(APPEND disabled_features ${feature})
+        endif()
+    endforeach()
+    set_property(TARGET Slint APPEND PROPERTY SLINT_ENABLED_FEATURES "${enabled_features}")
+    set_property(TARGET Slint APPEND PROPERTY SLINT_DISABLED_FEATURES "${disabled_features}")
+    set_property(TARGET Slint APPEND PROPERTY EXPORT_PROPERTIES "SLINT_ENABLED_FEATURES")
+    set_property(TARGET Slint APPEND PROPERTY EXPORT_PROPERTIES "SLINT_DISABLED_FEATURES")
+
     if (SLINT_FEATURE_FREESTANDING)
         if (ESP_PLATFORM)
             list(APPEND features "esp-backtrace/${IDF_TARGET}")
+            list(APPEND features "esp-println/${IDF_TARGET}")
         endif()
     else (SLINT_FEATURE_FREESTANDING)
         list(APPEND features std)
@@ -161,25 +186,25 @@ if (SLINT_BUILD_RUNTIME)
 
 
     set_property(
-        TARGET slint-cpp
+        TARGET slint_cpp
         APPEND
         PROPERTY CORROSION_ENVIRONMENT_VARIABLES
         "SLINT_GENERATED_INCLUDE_DIR=${CMAKE_CURRENT_BINARY_DIR}/generated_include/"
     )
 
     set_property(
-        TARGET slint-cpp
+        TARGET slint_cpp
         PROPERTY CORROSION_FEATURES
         ${features}
     )
     set_property(
-        TARGET slint-cpp
+        TARGET slint_cpp
         PROPERTY CORROSION_NO_DEFAULT_FEATURES
         ON
     )
 
     if(SLINT_LIBRARY_CARGO_FLAGS)
-        corrosion_set_cargo_flags(slint-cpp ${SLINT_LIBRARY_CARGO_FLAGS})
+        corrosion_set_cargo_flags(slint_cpp ${SLINT_LIBRARY_CARGO_FLAGS})
     endif()
 
     if(SLINT_FEATURE_BACKEND_QT)
@@ -194,14 +219,14 @@ if (SLINT_BUILD_RUNTIME)
 
     if(SLINT_FEATURE_BACKEND_QT AND TARGET Qt::qmake)
         set_property(
-            TARGET slint-cpp
+            TARGET slint_cpp
             APPEND
             PROPERTY CORROSION_ENVIRONMENT_VARIABLES
             QMAKE=$<TARGET_PROPERTY:Qt::qmake,LOCATION>
         )
     else()
         set_property(
-            TARGET slint-cpp
+            TARGET slint_cpp
             APPEND
             PROPERTY CORROSION_ENVIRONMENT_VARIABLES
             SLINT_NO_QT=1
@@ -235,7 +260,7 @@ if (SLINT_BUILD_RUNTIME)
     # to build time.
     if(DEFINED ENV{PKG_CONFIG_SYSROOT_DIR})
         set_property(
-            TARGET slint-cpp
+            TARGET slint_cpp
             APPEND
             PROPERTY CORROSION_ENVIRONMENT_VARIABLES
             "PKG_CONFIG_SYSROOT_DIR=$ENV{PKG_CONFIG_SYSROOT_DIR}"
@@ -247,7 +272,7 @@ if (SLINT_BUILD_RUNTIME)
         find_program(CLANGCXX clang++)
         if(CLANGCC AND NOT DEFINED ENV{CLANGCC})
             set_property(
-                TARGET slint-cpp
+                TARGET slint_cpp
                 APPEND
                 PROPERTY CORROSION_ENVIRONMENT_VARIABLES
                 CLANGCC=${CLANGCC}
@@ -255,7 +280,7 @@ if (SLINT_BUILD_RUNTIME)
         endif()
         if(CLANGCXX AND NOT DEFINED ENV{CLANGCXX})
             set_property(
-                TARGET slint-cpp
+                TARGET slint_cpp
                 APPEND
                 PROPERTY CORROSION_ENVIRONMENT_VARIABLES
                 CLANGCXX=${CLANGCXX}
@@ -283,13 +308,13 @@ if (SLINT_BUILD_RUNTIME)
             if(host_cc)
                 string(REPLACE "-" "_" cargo_host_target_underscore "${Rust_CARGO_HOST_TARGET}")
                 set_property(
-                    TARGET slint-cpp
+                    TARGET slint_cpp
                     APPEND
                     PROPERTY CORROSION_ENVIRONMENT_VARIABLES
                     CC_${cargo_host_target_underscore}=${host_cc}
                 )
                 set_property(
-                    TARGET slint-cpp
+                    TARGET slint_cpp
                     APPEND
                     PROPERTY CORROSION_ENVIRONMENT_VARIABLES
                     CFLAGS_${cargo_host_target_underscore}=
@@ -348,10 +373,10 @@ if (SLINT_BUILD_RUNTIME)
         include(${CMAKE_CURRENT_LIST_DIR}/cmake/SlintMacro.cmake)
     endif()
 
-    export(TARGETS Slint slint-cpp
+    export(TARGETS Slint slint_cpp
         NAMESPACE Slint:: FILE "${CMAKE_BINARY_DIR}/lib/cmake/Slint/SlintTargets.cmake")
     install(EXPORT SlintTargets NAMESPACE Slint:: DESTINATION lib/cmake/Slint)
-    install(TARGETS Slint slint-cpp
+    install(TARGETS Slint slint_cpp
         EXPORT SlintTargets LIBRARY DESTINATION lib PUBLIC_HEADER DESTINATION include/slint)
 
     install(FILES $<TARGET_FILE:${slint_cpp_impl}> TYPE LIB)
@@ -408,7 +433,7 @@ if(SLINT_BUILD_RUNTIME)
 
     write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/lib/cmake/Slint/SlintConfigVersion.cmake
-        VERSION 1.3.2
+        VERSION 1.7.1
         COMPATIBILITY SameMinorVersion
     )
 
@@ -425,18 +450,30 @@ set(CPACK_PACKAGE_NAME "Slint-cpp")
 set(CPACK_PACKAGE_VENDOR "Slint")
 set(CPACK_VERBATIM_VARIABLES true)
 set(CPACK_PACKAGE_VERSION_MAJOR 1)
-set(CPACK_PACKAGE_VERSION_MINOR 3)
-set(CPACK_PACKAGE_VERSION_PATCH 2)
+set(CPACK_PACKAGE_VERSION_MINOR 7)
+set(CPACK_PACKAGE_VERSION_PATCH 1)
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://slint.dev")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_LIST_DIR}/../../LICENSE.md")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_LIST_DIR}/README.md")
 set(CPACK_STRIP_FILES ON)
 set(CPACK_NSIS_DEFINES "ManifestDPIAware true")
 
-if(NOT WIN32)
+if(WIN32)
+    if(MSVC)
+        set(compiler_suffix "-MSVC")
+    elseif(MINGW)
+        set(compiler_suffix "-MinGW")
+    endif()
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(CPACK_SYSTEM_NAME win64)
+    else()
+        set(CPACK_SYSTEM_NAME win32)
+    endif()
+    set(CPACK_SYSTEM_NAME "${CPACK_SYSTEM_NAME}${compiler_suffix}")
+else()
     set(CPACK_GENERATOR "TGZ")
     set(CPACK_SYSTEM_NAME "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
-endif(NOT WIN32)
+endif()
 
 include(CPack)
 

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { CupertinoFontSettings, CupertinoPalette } from "styling.slint";
 import { FocusBorder } from "components.slint";
@@ -8,11 +8,11 @@ export component Switch {
     in property <bool> enabled: true;
     in property <string> text;
     out property <bool> has-focus: i-focus-scope.has-focus;
-    in-out property <bool> checked: true;
+    in-out property <bool> checked;
 
     callback toggled;
 
-    private property <brush> background: checked && root.enabled ? CupertinoPalette.accent : CupertinoPalette.surface-alt;
+    private property <brush> background: checked && root.enabled ? CupertinoPalette.accent-background : CupertinoPalette.alternate-control-background;
     private property <color> text-color: CupertinoPalette.foreground;
 
     function toggle-checked() {
@@ -25,13 +25,17 @@ export component Switch {
     }
 
     min-width: 26px;
-    min-height: 15px;
+    min-height: max(15px, i-layout.min-height);
     vertical-stretch: 0;
     horizontal-stretch: 0;
     accessible-label: root.text;
     accessible-checkable: true;
     accessible-checked <=> root.checked;
-    accessible-role: checkbox;
+    accessible-role: switch;
+    accessible-action-default => {
+        root.checked = !root.checked;
+        root.toggled();
+    }    
     forward-focus: i-focus-scope;
 
     states [
@@ -39,10 +43,10 @@ export component Switch {
             root.opacity: 0.5;
         }
         pressed when i-touch-area.pressed : {
-            root.background: root.checked ? CupertinoPalette.accent-secondary : CupertinoPalette.surface-secondary;
+            root.background: root.checked ? CupertinoPalette.secondary-accent-background : CupertinoPalette.secondary-control-background;
         }
         selected when root.checked : {
-            i-rail.background: CupertinoPalette.accent;
+            i-rail.background: CupertinoPalette.accent-background;
         }
     ]
 
@@ -79,7 +83,7 @@ export component Switch {
                     height: parent.height - 2px;
                     width: self.height;
                     border-radius: self.height / 2;
-                    background: CupertinoPalette.surface-thumb;
+                    background: CupertinoPalette.control-background-thumb;
                     drop-shadow-blur: 0.5px;
                     drop-shadow-offset-y: 0.25px;
                     drop-shadow-color: #0000001F;

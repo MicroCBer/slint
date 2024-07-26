@@ -62,17 +62,25 @@ export component Example inherits Window {
 ### Accessibility
 
 Use the following `accessible-` properties to make your items interact well with software like screen readers, braille terminals and other software to make your application accessible.
+`accessible-role` must be set in order to be able to set any other accessible property or callback.
 
 -   **`accessible-role`** (_in_ _enum [`AccessibleRole`](enums.md#accessiblerole)_): The role of the element. This property is mandatory to be able to use any other accessible properties. It should be set to a constant value. (default value: `none` for most elements, but `text` for the Text element)
 -   **`accessible-checkable`** (_in_ _bool_): Whether the element is can be checked or not.
 -   **`accessible-checked`** (_in_ _bool_): Whether the element is checked or not. This maps to the "checked" state of checkboxes, radio buttons, and other widgets.
 -   **`accessible-description`** (_in_ _string_): The description for the current element.
--   **`accessible-has-focus`** (_in_ _bool_): Set to true when the current element currently has the focus.
 -   **`accessible-label`** (_in_ _string_): The label for an interactive element. (default value: empty for most elements, or the value of the `text` property for Text elements)
 -   **`accessible-value-maximum`** (_in_ _float_): The maximum value of the item. This is used for example by spin boxes.
 -   **`accessible-value-minimum`** (_in_ _float_): The minimum value of the item.
 -   **`accessible-value-step`** (_in_ _float_) The smallest increment or decrement by which the current value can change. This corresponds to the step by which a handle on a slider can be dragged.
 -   **`accessible-value`** (_in_ _string_): The current value of the item.
+-   **`accessible-placeholder-text`** (_in_ _string_): A placeholder text to use when the item's value is empty. Applies to text elements.
+
+You can also use the following callbacks that are going to be called by the accessibility framework:
+
+-  **`accessible-action-default()`**: Invoked when the default action for this widget is requested (eg: pressed for a button).
+-  **`accessible-action-set-value(string)`**: Invoked when the user wants to change the accessible value.
+-  **`accessible-action-increment()`**: Invoked when the user requests to increment the value.
+-  **`accessible-action-decrement()`**: Invoked when the user requests to decrement the value.
 
 ### Drop Shadows
 
@@ -166,6 +174,10 @@ interacting with `TouchArea` elements:
 -   **`viewport-height`**, **`viewport-width`** (_in_ _length_): The total size of the scrollable element.
 -   **`viewport-x`**, **`viewport-y`** (_in_ _length_): The position of the scrollable element relative to the `Flickable`. This is usually a negative value.
 
+### Callbacks
+
+-   **`flicked()`**: Invoked when `viewport-x` or `viewport-y` is changed by a user action (dragging, scrolling).
+
 ### Example
 
 ```slint
@@ -205,6 +217,7 @@ or it will be mapped to a private unicode character. The mapping of these non-pr
 
 -   **`focus()`** Call this function to transfer keyboard focus to this `FocusScope`,
     to receive future [`KeyEvent`](structs.md#keyevent)s.
+-   **`clear-focus()`** Call this function to remove keyboard focus from this `FocusScope` if it currently has the focus. See also [](../concepts/focus.md).
 
 ### Callbacks
 
@@ -297,12 +310,16 @@ An `Image` can be used to represent an image loaded from a file.
 ### Properties
 
 -   **`colorize`** (_in_ _brush_): When set, the image is used as an alpha mask and is drawn in the given color (or with the gradient).
--   **`image-fit`** (_in_ _enum [`ImageFit`](enums.md#imagefit)_): Specifies how the source image shall be fit into the image element. (default value: `contain` when the `Image` element is part of a layout, `fill` otherwise)
+-   **`horizontal-alignment`** (_in_ _enum [`ImageHorizontalAlignment`](enums.md#imagehorizontalalignment)_): The horizontal alignment of the image within the element.
+-   **`horizontal-tiling`** (_in_ _enum [`ImageTiling`](enums.md#imagetiling)_): Whether the image should be tiled on the horizontal axis.
+-   **`image-fit`** (_in_ _enum [`ImageFit`](enums.md#imagefit)_): Specifies how the source image shall be fit into the image element.
+    Does not have any effect when used with 9 slice scaled or tiled images.
+    (default value: `contain` when the `Image` element is part of a layout, `fill` otherwise)
 -   **`image-rendering`** (_in_ _enum [`ImageRendering`](enums.md#imagerendering)_): Specifies how the source image will be scaled. (default value: `smooth`)
 -   **`rotation-angle`** (_in_ _angle_), **`rotation-origin-x`** (_in_ _length_), **`rotation-origin-y`** (_in_ _length_):
     Rotates the image by the given angle around the specified origin point. The default origin point is the center of the element.
     When these properties are set, the `Image` can't have children.
--   **`source`** (_in_ _image_): The image to load. Use the `@image-url("...")` macro to specify the location of the image.
+-   **`source`** (_in_ _image_): The image to load. Use the [`@image-url("...")` macro](../syntax/types#images) to specify the location of the image.
 -   **`source-clip-x`**, **`source-clip-y`**, **`source-clip-width`**, **`source-clip-height`** (_in_ _int_): Properties in source
     image coordinates that define the region of the source image that is rendered. By default the entire source image is visible:
     | Property | Default Binding |
@@ -311,6 +328,8 @@ An `Image` can be used to represent an image loaded from a file.
     | `source-clip-y` | `0` |
     | `source-clip-width` | `source.width - source-clip-x` |
     | `source-clip-height` | `source.height - source-clip-y` |
+-   **`vertical-alignment`** (_in_ _enum [`ImageVerticalAlignment`](enums.md#imageverticalalignment)_): The vertical alignment of the image within the element.
+-   **`vertical-tiling`** (_in_ _enum [`ImageTiling`](enums.md#imagetiling)_): Whether the image should be tiled on the vertical axis.
 -   **`width`**, **`height`** (_in_ _length_): The width and height of the image as it appears on the screen.The default values are
     the sizes provided by the **`source`** image. If the `Image` is **not** in a layout and only **one** of the two sizes are
     specified, then the other defaults to the specified value scaled according to the aspect ratio of the **`source`** image.
@@ -346,6 +365,20 @@ export component Example inherits Window {
             width: 100px;
             // implicit default, preserving aspect ratio:
             // height: self.width * natural_height / natural_width;
+        }
+    }
+}
+```
+
+Example using nine-slice:
+
+```slint
+export component Example inherits Window {
+    width: 100px;
+    height: 150px;
+    VerticalLayout {
+        Image {
+            source: @image-url("https://interactive-examples.mdn.mozilla.net/media/examples/border-diamonds.png", nine-slice(30));
         }
     }
 }
@@ -565,6 +598,7 @@ When not part of a layout, its width and height default to 100% of the parent el
 -   **`background`** (_in_ _brush_): The background brush of this `Rectangle`, typically a color. (default value: `transparent`)
 -   **`border-color`** (_in_ _brush_): The color of the border. (default value: `transparent`)
 -   **`border-radius`** (_in_ _length_): The size of the radius. (default value: 0)
+-   **`border-top-left-radius`**, **`border-top-right-radius`**, **`border-bottom-left-radius`** and **`border-bottom-right-radius`** (_in_ _length_): Set these properties to override the radius for specific corners.
 -   **`border-width`** (_in_ _length_): The width of the border. (default value: 0)
 -   **`clip`** (_in_ _bool_): By default, when an element is bigger or outside another element, it's still shown. When this property is set to `true`, the children of this `Rectangle` are clipped to the border of the rectangle. (default value: `false`)
 
@@ -648,6 +682,8 @@ When not part of a layout, its width or height defaults to 100% of the parent el
 ### Functions
 
 -   **`focus()`** Call this function to focus the text input and make it receive future keyboard events.
+-   **`clear-focus()`** Call this function to remove keyboard focus from this `TextInput` if it currently has the focus. See also [](../concepts/focus.md).
+-   **`set-selection-offsets(int, int)`** Selects the text between two UTF-8 offsets.
 -   **`select-all()`** Selects all text.
 -   **`clear-selection()`** Clears the selection.
 -   **`copy()`** Copies the selected text to the clipboard.
@@ -677,7 +713,8 @@ export component Example inherits Window {
 ## `Text`
 
 The `Text` element is responsible for rendering text. Besides the `text` property, that specifies which text to render,
-it also allows configuring different visual aspects through the `font-family`, `font-size`, `font-weight` and `color` properties.
+it also allows configuring different visual aspects through the `font-family`, `font-size`, `font-weight`, `color`, and
+`stroke` properties.
 
 The `Text` element can break long text into multiple lines of text. A line feed character (`\n`) in the string of the `text`
 property will trigger a manual line break. For automatic line breaking you need to set the `wrap` property to a value other than
@@ -698,6 +735,12 @@ and the text itself.
 -   **`text`** (_in_ _[string](../syntax/types.md#strings)_): The text rendered.
 -   **`vertical-alignment`** (_in_ _enum [`TextVerticalAlignment`](enums.md#textverticalalignment)_): The vertical alignment of the text.
 -   **`wrap`** (_in_ _enum [`TextWrap`](enums.md#textwrap)_): The way the text wraps (default value: `no-wrap`).
+-   **`stroke`** (_in_ _brush_): The brush used for the text outline (default value: `transparent`).
+-   **`stroke-width`** (_in_ _length_): The width of the text outline. If the width is zero, then a hairline stroke (1 physical pixel) will be rendered.
+-   **`stroke-style`** (_in_ _enum [`TextStrokeStyle`](enums.md#textstrokestyle)_): The style/alignment of the text outline (default value: `outside`).
+-   **`rotation-angle`** (_in_ _angle_), **`rotation-origin-x`** (_in_ _length_), **`rotation-origin-y`** (_in_ _length_):
+    Rotates the text by the given angle around the specified origin point. The default origin point is the center of the element.
+    When these properties are set, the `Text` can't have children.
 
 ### Example
 
@@ -751,13 +794,16 @@ When not part of a layout, its width or height default to 100% of the parent ele
 
 ### Callbacks
 
--   **`clicked()`**: Invoked when clicked: The mouse is pressed, then released on this element.
--   **`double-clicked()**`: Invoked when double-clicked. The mouse is pressed and released twice on this element in a short
-    period of time. Assigning this callback will cause the `clicked` callback to get delayed, so that Slint can
-    detect whether the first click was a click or the first half of a double click.
--   **`moved()`**: The mouse has been moved. This will only be called if the mouse is also pressed.
--   **`pointer-event(PointerEvent)`**: Invoked when a button was pressed or released. The [_`PointerEvent`_](structs.md#pointerevent)
-    argument contains information such which button was pressed and any active keyboard modifiers.
+-   **`clicked()`**: Invoked when clicked: A finger or the left mouse button is pressed, then released on this element.
+-   **`double-clicked()`**: Invoked when double-clicked. The left mouse button is pressed and released twice on this element in a short
+    period of time, or the same is done with a finger. The `clicked()` callbacks will be triggered before the `double-clicked()` callback is triggered.
+-   **`moved()`**: The mouse or finger has been moved. This will only be called if the mouse is also pressed or the finger continues to touch
+    the display. See also **pointer-event(PointerEvent)**.
+-   **`pointer-event(PointerEvent)`**: Invoked when a button was pressed or released, a finger touched, or the pointer moved.
+    The [_`PointerEvent`_](structs.md#pointerevent) argument contains information such which button was pressed
+    and any active keyboard modifiers.
+    In the [_`PointerEventKind::Move`_](structs.md#pointereventkind) case the `buttons` field will always
+    be set to `PointerEventButton::Other`, independent of whether any button is pressed or not.
 -   **`scroll-event(PointerScrollEvent) -> EventResult`**: Invoked when the mouse wheel was rotated or another scroll gesture was made.
     The [_`PointerScrollEvent`_](structs.md#pointerscrollevent) argument contains information about how much to scroll in what direction.
     The returned [`EventResult`](enums.md#eventresult) indicates whether to accept or ignore the event. Ignored events are
@@ -836,4 +882,5 @@ or smaller. The initial width can be controlled with the `preferred-width` prope
 -   **`default-font-weight`** (_in_ _int_): The font weight to use as default in text elements inside this window, that don't have their `font-weight` property set. The values range from 100 (lightest) to 900 (thickest). 400 is the normal weight.
 -   **`icon`** (_in_ _image_): The window icon shown in the title bar or the task bar on window managers supporting it.
 -   **`no-frame`** (_in_ _bool_): Whether the window should be borderless/frameless or not.
+-   **`resize-border-width`** (_in_ _length_): Size of the resize border in borderless/frameless windows (winit only for now).
 -   **`title`** (_in_ _string_): The window title that is shown in the title bar.

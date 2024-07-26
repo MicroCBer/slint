@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use crate::diagnostics::BuildDiagnostics;
 use crate::langtype::ElementType;
@@ -26,7 +26,6 @@ pub fn lower_component_container(
 fn diagnose_component_container(element: &ElementRc, diag: &mut BuildDiagnostics) {
     if !element.borrow().children.is_empty() {
         diag.push_error("ComponentContainers may not have children".into(), &*element.borrow());
-        return;
     }
 }
 
@@ -36,7 +35,7 @@ fn process_component_container(element: &ElementRc, empty_type: &ElementType) {
     let embedded_element = Element::make_rc(Element {
         base_type: empty_type.clone(),
         id: elem.id.clone(),
-        node: elem.node.clone(),
+        debug: elem.debug.clone(),
         enclosing_component: elem.enclosing_component.clone(),
         default_fill_parent: (true, true),
         is_legacy_syntax: elem.is_legacy_syntax,

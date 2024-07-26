@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 The backend is the abstraction for crates that need to do the actual drawing and event loop
@@ -13,11 +13,13 @@ pub use crate::renderer::Renderer;
 #[cfg(feature = "software-renderer")]
 pub use crate::software_renderer;
 #[cfg(all(not(feature = "std"), feature = "unsafe-single-threaded"))]
-use crate::unsafe_single_threaded::{thread_local, OnceCell};
+use crate::unsafe_single_threaded::OnceCell;
 pub use crate::window::{LayoutConstraints, WindowAdapter, WindowProperties};
 use crate::SharedString;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 #[cfg(feature = "std")]
 use once_cell::sync::OnceCell;
@@ -62,13 +64,15 @@ pub trait Platform {
         Err(PlatformError::NoEventLoopProvider)
     }
 
-    /// Specify if the event loop should quit quen the last window is closed.
-    /// The default behavior is `true`.
-    /// When this is set to `false`, the event loop must keep running until
-    /// [`slint::quit_event_loop()`](crate::api::quit_event_loop()) is called
     #[doc(hidden)]
-    fn set_event_loop_quit_on_last_window_closed(&self, _quit_on_last_window_closed: bool) {
-        unimplemented!("The backend does not implement event loop quit behaviors")
+    #[deprecated(
+        note = "i-slint-core takes care of closing behavior. Application should call run_event_loop_until_quit"
+    )]
+    /// This is being phased out, see #1499.
+    fn set_event_loop_quit_on_last_window_closed(&self, quit_on_last_window_closed: bool) {
+        assert!(!quit_on_last_window_closed);
+        crate::context::GLOBAL_CONTEXT
+            .with(|ctx| (*ctx.get().unwrap().0.window_count.borrow_mut()) += 1);
     }
 
     /// Return an [`EventLoopProxy`] that can be used to send event to the event loop
@@ -102,6 +106,7 @@ pub trait Platform {
     ///
     /// A double click event is a series of two pointer clicks.
     fn click_interval(&self) -> core::time::Duration {
+        // 500ms is the default delay according to https://en.wikipedia.org/wiki/Double-click#Speed_and_timing
         core::time::Duration::from_millis(500)
     }
 
@@ -171,11 +176,6 @@ impl std::convert::From<crate::animations::Instant> for time::Instant {
     }
 }
 
-thread_local! {
-    /// Internal: Singleton of the platform abstraction.
-    pub(crate) static PLATFORM_INSTANCE : once_cell::unsync::OnceCell<Box<dyn Platform>>
-        = once_cell::unsync::OnceCell::new()
-}
 static EVENTLOOP_PROXY: OnceCell<Box<dyn EventLoopProxy + 'static>> = OnceCell::new();
 
 pub(crate) fn event_loop_proxy() -> Option<&'static dyn EventLoopProxy> {
@@ -188,22 +188,40 @@ pub(crate) fn event_loop_proxy() -> Option<&'static dyn EventLoopProxy> {
 #[repr(C)]
 #[non_exhaustive]
 pub enum SetPlatformError {
-    /// The platform has been initialized in an earlier call to [`set_platform`].
+    /// The platform has already been initialized in an earlier call to [`set_platform`].
     AlreadySet,
 }
+
+impl core::fmt::Display for SetPlatformError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SetPlatformError::AlreadySet => {
+                f.write_str("The platform has already been initialized.")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SetPlatformError {}
 
 /// Set the Slint platform abstraction.
 ///
 /// If the platform abstraction was already set this will return `Err`.
 pub fn set_platform(platform: Box<dyn Platform + 'static>) -> Result<(), SetPlatformError> {
-    PLATFORM_INSTANCE.with(|instance| {
+    crate::context::GLOBAL_CONTEXT.with(|instance| {
         if instance.get().is_some() {
             return Err(SetPlatformError::AlreadySet);
         }
         if let Some(proxy) = platform.new_event_loop_proxy() {
             EVENTLOOP_PROXY.set(proxy).map_err(|_| SetPlatformError::AlreadySet)?
         }
-        instance.set(platform).map_err(|_| SetPlatformError::AlreadySet).unwrap();
+        instance
+            .set(crate::SlintContext::new(platform))
+            .map_err(|_| SetPlatformError::AlreadySet)
+            .unwrap();
+        // Ensure a sane starting point for the animation tick.
+        update_timers_and_animations();
         Ok(())
     })
 }
@@ -216,6 +234,7 @@ pub fn set_platform(platform: Box<dyn Platform + 'static>) -> Result<(), SetPlat
 pub fn update_timers_and_animations() {
     crate::animations::update_animations();
     crate::timers::TimerList::maybe_activate_timers(crate::animations::Instant::now());
+    crate::properties::ChangeTracker::run_change_handlers();
 }
 
 /// Returns the duration before the next timer is expected to be activated. This is the
@@ -229,8 +248,8 @@ pub fn update_timers_and_animations() {
 /// returns false.
 pub fn duration_until_next_timer_update() -> Option<core::time::Duration> {
     crate::timers::TimerList::next_timeout().map(|timeout| {
-        let duration_since_start = crate::platform::PLATFORM_INSTANCE
-            .with(|p| p.get().map(|p| p.duration_since_start()))
+        let duration_since_start = crate::context::GLOBAL_CONTEXT
+            .with(|p| p.get().map(|p| p.0.platform.duration_since_start()))
             .unwrap_or_default();
         core::time::Duration::from_millis(
             timeout.0.saturating_sub(duration_since_start.as_millis() as u64),
@@ -357,3 +376,29 @@ impl WindowEvent {
         }
     }
 }
+
+/**
+ * Test the animation tick is updated when a platform is set
+```rust
+use i_slint_core::platform::*;
+struct DummyBackend;
+impl Platform for DummyBackend {
+     fn create_window_adapter(
+        &self,
+    ) -> Result<std::rc::Rc<dyn WindowAdapter>, PlatformError> {
+        Err(PlatformError::Other("not implemented".into()))
+    }
+    fn duration_since_start(&self) -> core::time::Duration {
+        core::time::Duration::from_millis(100)
+    }
+}
+
+let start_time = i_slint_core::tests::slint_get_mocked_time();
+i_slint_core::platform::set_platform(Box::new(DummyBackend{}));
+let time_after_platform_init = i_slint_core::tests::slint_get_mocked_time();
+assert_ne!(time_after_platform_init, start_time);
+assert_eq!(time_after_platform_init, 100);
+```
+ */
+#[cfg(doctest)]
+const _ANIM_TICK_UPDATED_ON_PLATFORM_SET: () = ();

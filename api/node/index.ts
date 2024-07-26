@@ -1,20 +1,17 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import * as napi from "./rust-module.cjs";
-const {
-    Diagnostic,
-    DiagnosticLevel,
-    RgbaColor,
-    Brush
-} = napi;
-
 export {
     Diagnostic,
     DiagnosticLevel,
     RgbaColor,
     Brush
-};
+} from "./rust-module";
+
+import {
+    Diagnostic
+} from "./rust-module.cjs";
 
 /**
  *  Represents a two-dimensional point.
@@ -64,6 +61,15 @@ export interface Window {
     /** Gets or sets the physical size of the window on the screen, */
     physicalSize: Size;
 
+    /** Gets or sets the window's fullscreen state **/
+    fullscreen: boolean;
+
+    /** Gets or sets the window's maximized state **/
+    maximized: boolean;
+
+    /** Gets or sets teh window's minimized state **/
+    minimized: boolean;
+
     /**
      * Returns the visibility state of the window. This function can return false even if you previously called show()
      * on it, for example if the user minimized the window.
@@ -109,6 +115,31 @@ export interface ImageData {
      *  Returns the height of the image in pixels.
      */
     get height(): number;
+}
+
+class ModelIterator<T> implements Iterator<T> {
+    private row: number;
+    private model: Model<T>;
+
+    constructor(model: Model<T>) {
+        this.model = model;
+        this.row = 0;
+    }
+
+    public next(): IteratorResult<T> {
+        if (this.row < this.model.rowCount()) {
+            let row = this.row;
+            this.row++;
+            return {
+                done: false,
+                value: this.model.rowData(row)
+            }
+        }
+        return {
+            done: true,
+            value: undefined
+        }
+    }
 }
 
 /**
@@ -170,14 +201,14 @@ export interface ImageData {
  *}
  * ```
  */
-export abstract class Model<T> {
+export abstract class Model<T> implements Iterable<T> {
     /**
      * @hidden
      */
-    notify: NullPeer;
+    modelNotify: napi.ExternalObject<napi.SharedModelNotify>;
 
     constructor() {
-        this.notify = new NullPeer();
+        this.modelNotify = napi.jsModelNotifyNew(this);
     }
 
     // /**
@@ -206,8 +237,8 @@ export abstract class Model<T> {
     /**
      * Implementations of this function must store the provided data parameter
      * in the model at the specified row.
-     * @param row index in range 0..(rowCount() - 1).
-     * @param data new data item to store on the given row index
+     * @param _row index in range 0..(rowCount() - 1).
+     * @param _data new data item to store on the given row index
      */
     setRowData(_row: number, _data: T): void {
         console.log(
@@ -215,12 +246,16 @@ export abstract class Model<T> {
         );
     }
 
+    [Symbol.iterator](): Iterator<T> {
+        return new ModelIterator(this);
+    }
+
     /**
      * Notifies the view that the data of the current row is changed.
      * @param row index of the changed row.
      */
     protected notifyRowDataChanged(row: number): void {
-        this.notify.rowDataChanged(row);
+        napi.jsModelNotifyRowDataChanged(this.modelNotify, row);
     }
 
     /**
@@ -229,7 +264,7 @@ export abstract class Model<T> {
      * @param count the number of added items.
      */
     protected notifyRowAdded(row: number, count: number): void {
-        this.notify.rowAdded(row, count);
+        napi.jsModelNotifyRowAdded(this.modelNotify, row, count);
     }
 
     /**
@@ -238,25 +273,15 @@ export abstract class Model<T> {
      * @param count the number of removed items.
      */
     protected notifyRowRemoved(row: number, count: number): void {
-        this.notify.rowRemoved(row, count);
+        napi.jsModelNotifyRowRemoved(this.modelNotify, row, count);
     }
 
     /**
      * Notifies the view that the complete data must be reload.
      */
     protected notifyReset(): void {
-        this.notify.reset();
+        napi.jsModelNotifyReset(this.modelNotify);
     }
-}
-
-/**
- * @hidden
- */
-class NullPeer {
-    rowDataChanged(row: number): void {}
-    rowAdded(row: number, count: number): void {}
-    rowRemoved(row: number, count: number): void {}
-    reset(): void {}
 }
 
 /**
@@ -323,6 +348,19 @@ export class ArrayModel<T> extends Model<T> {
         this.notifyRowAdded(size, arguments.length);
     }
 
+    /**
+     * Removes the last element from the array and returns it.
+     *
+     * @returns The removed element or undefined if the array is empty.
+     */
+    pop(): T | undefined {
+        let last = this.#array.pop();
+        if (last !== undefined) {
+            this.notifyRowRemoved(this.#array.length, 1);
+        }
+        return last;
+    }
+
     // FIXME: should this be named splice and have the splice api?
     /**
      * Removes the specified number of element from the array that's backing
@@ -351,161 +389,164 @@ export class ArrayModel<T> extends Model<T> {
 }
 
 export namespace private_api {
-/**
- * Provides rows that are generated by a map function based on the rows of another Model.
- *
- * @template T item type of source model that is mapped to U.
- * @template U the type of the mapped items
- *
- * ## Example
- *
- *  Here we have a {@link ArrayModel} holding rows of a custom interface `Name` and a {@link MapModel} that maps the name rows
- *  to single string rows.
- *
- * ```ts
- * import { Model, ArrayModel, MapModel } from "./index";
-*
-* interface Name {
-*     first: string;
-*     last: string;
-* }
-*
-* const model = new ArrayModel<Name>([
-*     {
-*         first: "Hans",
-*         last: "Emil",
-*     },
-*     {
-*         first: "Max",
-*         last: "Mustermann",
-*     },
-*     {
-*         first: "Roman",
-*         last: "Tisch",
-*     },
-* ]);
-*
-* const mappedModel = new MapModel(
-*     model,
-*     (data) => {
-*         return data.last + ", " + data.first;
-*     }
-* );
-*
-* // prints "Emil, Hans"
-* console.log(mappedModel.rowData(0));
-*
-* // prints "Mustermann, Max"
-* console.log(mappedModel.rowData(1));
-*
-* // prints "Tisch, Roman"
-* console.log(mappedModel.rowData(2));
-*
-* // Alternatively you can use the shortcut {@link MapModel.map}.
-*
-* const model = new ArrayModel<Name>([
-*     {
-*         first: "Hans",
-*         last: "Emil",
-*     },
-*     {
-*         first: "Max",
-*         last: "Mustermann",
-*     },
-*     {
-*         first: "Roman",
-*         last: "Tisch",
-*     },
-* ]);
-*
-* const mappedModel = model.map(
-*     (data) => {
-*         return data.last + ", " + data.first;
-*     }
-* );
-*
-*
-* // prints "Emil, Hans"
-* console.log(mappedModel.rowData(0));
-*
-* // prints "Mustermann, Max"
-* console.log(mappedModel.rowData(1));
-*
-* // prints "Tisch, Roman"
-* console.log(mappedModel.rowData(2));
-*
-* // You can modifying the underlying {@link ArrayModel}:
-*
-* const model = new ArrayModel<Name>([
-*     {
-*         first: "Hans",
-*         last: "Emil",
-*     },
-*     {
-*         first: "Max",
-*         last: "Mustermann",
-*     },
-*     {
-*         first: "Roman",
-*         last: "Tisch",
-*     },
-* ]);
-*
-* const mappedModel = model.map(
-*     (data) => {
-*         return data.last + ", " + data.first;
-*     }
-* );
-*
-* model.setRowData(1, { first: "Minnie", last: "Musterfrau" } );
-*
-* // prints "Emil, Hans"
-* console.log(mappedModel.rowData(0));
-*
-* // prints "Musterfrau, Minnie"
-* console.log(mappedModel.rowData(1));
-*
-* // prints "Tisch, Roman"
-* console.log(mappedModel.rowData(2));
-* ```
-*/
-export class MapModel<T, U> extends Model<U> {
-    readonly sourceModel: Model<T>;
-    #mapFunction: (data: T) => U
-
     /**
-     * Constructs the MapModel with a source model and map functions.
+     * Provides rows that are generated by a map function based on the rows of another Model.
+     *
      * @template T item type of source model that is mapped to U.
-     * @template U the type of the mapped items.
-     * @param sourceModel the wrapped model.
-     * @param mapFunction maps the data from T to U.
-     */
-    constructor(
-        sourceModel: Model<T>,
-        mapFunction: (data: T) => U
-    ) {
-        super();
-        this.sourceModel = sourceModel;
-        this.#mapFunction = mapFunction;
-        this.notify = this.sourceModel.notify;
-    }
+     * @template U the type of the mapped items
+     *
+     * ## Example
+     *
+     *  Here we have a {@link ArrayModel} holding rows of a custom interface `Name` and a {@link MapModel} that maps the name rows
+     *  to single string rows.
+     *
+     * ```ts
+     * import { Model, ArrayModel, MapModel } from "./index";
+    *
+    * interface Name {
+    *     first: string;
+    *     last: string;
+    * }
+    *
+    * const model = new ArrayModel<Name>([
+    *     {
+    *         first: "Hans",
+    *         last: "Emil",
+    *     },
+    *     {
+    *         first: "Max",
+    *         last: "Mustermann",
+    *     },
+    *     {
+    *         first: "Roman",
+    *         last: "Tisch",
+    *     },
+    * ]);
+    *
+    * const mappedModel = new MapModel(
+    *     model,
+    *     (data) => {
+    *         return data.last + ", " + data.first;
+    *     }
+    * );
+    *
+    * // prints "Emil, Hans"
+    * console.log(mappedModel.rowData(0));
+    *
+    * // prints "Mustermann, Max"
+    * console.log(mappedModel.rowData(1));
+    *
+    * // prints "Tisch, Roman"
+    * console.log(mappedModel.rowData(2));
+    *
+    * // Alternatively you can use the shortcut {@link MapModel.map}.
+    *
+    * const model = new ArrayModel<Name>([
+    *     {
+    *         first: "Hans",
+    *         last: "Emil",
+    *     },
+    *     {
+    *         first: "Max",
+    *         last: "Mustermann",
+    *     },
+    *     {
+    *         first: "Roman",
+    *         last: "Tisch",
+    *     },
+    * ]);
+    *
+    * const mappedModel = model.map(
+    *     (data) => {
+    *         return data.last + ", " + data.first;
+    *     }
+    * );
+    *
+    *
+    * // prints "Emil, Hans"
+    * console.log(mappedModel.rowData(0));
+    *
+    * // prints "Mustermann, Max"
+    * console.log(mappedModel.rowData(1));
+    *
+    * // prints "Tisch, Roman"
+    * console.log(mappedModel.rowData(2));
+    *
+    * // You can modifying the underlying {@link ArrayModel}:
+    *
+    * const model = new ArrayModel<Name>([
+    *     {
+    *         first: "Hans",
+    *         last: "Emil",
+    *     },
+    *     {
+    *         first: "Max",
+    *         last: "Mustermann",
+    *     },
+    *     {
+    *         first: "Roman",
+    *         last: "Tisch",
+    *     },
+    * ]);
+    *
+    * const mappedModel = model.map(
+    *     (data) => {
+    *         return data.last + ", " + data.first;
+    *     }
+    * );
+    *
+    * model.setRowData(1, { first: "Minnie", last: "Musterfrau" } );
+    *
+    * // prints "Emil, Hans"
+    * console.log(mappedModel.rowData(0));
+    *
+    * // prints "Musterfrau, Minnie"
+    * console.log(mappedModel.rowData(1));
+    *
+    * // prints "Tisch, Roman"
+    * console.log(mappedModel.rowData(2));
+    * ```
+    */
+    export class MapModel<T, U> extends Model<U> {
+        readonly sourceModel: Model<T>;
+        #mapFunction: (data: T) => U
 
-    /**
-     * Returns the number of entries in the model.
-     */
-    rowCount(): number {
-        return this.sourceModel.rowCount();
-    }
+        /**
+         * Constructs the MapModel with a source model and map functions.
+         * @template T item type of source model that is mapped to U.
+         * @template U the type of the mapped items.
+         * @param sourceModel the wrapped model.
+         * @param mapFunction maps the data from T to U.
+         */
+        constructor(
+            sourceModel: Model<T>,
+            mapFunction: (data: T) => U
+        ) {
+            super();
+            this.sourceModel = sourceModel;
+            this.#mapFunction = mapFunction;
+        }
 
-    /**
-     * Returns the data at the specified row.
-     * @param row index in range 0..(rowCount() - 1).
-     * @returns undefined if row is out of range otherwise the data.
-     */
-    rowData(row: number): U {
-        return this.#mapFunction(this.sourceModel.rowData(row));
+        /**
+         * Returns the number of entries in the model.
+         */
+        rowCount(): number {
+            return this.sourceModel.rowCount();
+        }
+
+        /**
+         * Returns the data at the specified row.
+         * @param row index in range 0..(rowCount() - 1).
+         * @returns undefined if row is out of range otherwise the data.
+         */
+        rowData(row: number): U | undefined {
+            let data = this.sourceModel.rowData(row);
+            if (data === undefined) {
+                return undefined;
+            }
+            return this.#mapFunction(data);
+        }
     }
-}
 }
 /**
  * This interface describes the public API of a Slint component that is common to all instances. Use this to
@@ -594,7 +635,18 @@ export class CompileError extends Error {
      * @param diagnostics represent a list of diagnostic items emitted while compiling .slint code.
      */
     constructor(message: string, diagnostics: napi.Diagnostic[]) {
-        super(message);
+        const formattedDiagnostics = diagnostics
+          .map((d) =>
+            `[${d.fileName}:${d.lineNumber}:${d.columnNumber}] ${d.message}`
+          )
+          .join("\n");
+    
+        let formattedMessage = message;
+        if (diagnostics.length > 0) {
+          formattedMessage += `\nDiagnostics:\n${formattedDiagnostics}`;
+        }
+
+        super(formattedMessage);
         this.diagnostics = diagnostics;
     }
 }
@@ -640,7 +692,7 @@ type LoadData = {
 }
 
 function loadSlint(loadData: LoadData): Object {
-    const {filePath ,options} = loadData.fileData
+    const { filePath, options } = loadData.fileData
 
     let compiler = new napi.ComponentCompiler();
 
@@ -656,8 +708,7 @@ function loadSlint(loadData: LoadData): Object {
         }
     }
 
-    let definition = loadData.from === 'file' ? compiler.buildFromPath(filePath) : compiler.buildFromSource(loadData.fileData.source, filePath);
-
+    let definitions = loadData.from === 'file' ? compiler.buildFromPath(filePath) : compiler.buildFromSource(loadData.fileData.source, filePath);
     let diagnostics = compiler.diagnostics;
 
     if (diagnostics.length > 0) {
@@ -680,134 +731,171 @@ function loadSlint(loadData: LoadData): Object {
 
     let slint_module = Object.create({});
 
-    Object.defineProperty(slint_module, definition!.name.replace(/-/g, "_"), {
-        value: function (properties: any) {
-            let instance = definition!.create();
+    Object.keys(definitions).forEach((key) => {
+        let definition = definitions[key];
 
-            if (instance == null) {
-                throw Error(
-                    "Could not create a component handle for" + filePath
-                );
-            }
+        Object.defineProperty(slint_module, definition.name.replace(/-/g, "_"), {
+            value: function (properties: any) {
+                let instance = definition.create();
 
-            for (var key in properties) {
-                let value = properties[key];
-
-                if (value instanceof Function) {
-                    instance.setCallback(key, value);
-                } else {
-                    instance.setProperty(key, properties[key]);
+                if (instance == null) {
+                    throw Error(
+                        "Could not create a component handle for" + filePath
+                    );
                 }
-            }
 
-            let componentHandle = new Component(instance!);
-            instance!.definition().properties.forEach((prop) => {
-                let propName = prop.name.replace(/-/g, "_");
+                for (var key in properties) {
+                    let value = properties[key];
 
-                if (componentHandle[propName] !== undefined) {
-                    console.warn("Duplicated property name " + propName);
-                } else {
-                    Object.defineProperty(componentHandle, propName, {
-                        get() {
-                            return instance!.getProperty(prop.name);
-                        },
-                        set(value) {
-                            instance!.setProperty(prop.name, value);
-                        },
-                        enumerable: true,
-                    });
+                    if (value instanceof Function) {
+                        instance.setCallback(key, value);
+                    } else {
+                        instance.setProperty(key, properties[key]);
+                    }
                 }
-            });
 
-            instance!.definition().callbacks.forEach((cb) => {
-                let callbackName = cb.replace(/-/g, "_");
+                let componentHandle = new Component(instance!);
+                instance!.definition().properties.forEach((prop) => {
+                    let propName = prop.name.replace(/-/g, "_");
 
-                if (componentHandle[callbackName] !== undefined) {
-                    console.warn("Duplicated callback name " + callbackName);
-                } else {
-                    Object.defineProperty(componentHandle, cb.replace(/-/g, "_"), {
-                        get() {
-                            return function () {
-                                return instance!.invoke(cb, Array.from(arguments));
-                            };
-                        },
-                        set(callback) {
-                            instance!.setCallback(cb, callback);
-                        },
-                        enumerable: true,
-                    });
-                }
-            });
+                    if (componentHandle[propName] !== undefined) {
+                        console.warn("Duplicated property name " + propName);
+                    } else {
+                        Object.defineProperty(componentHandle, propName, {
+                            get() {
+                                return instance!.getProperty(prop.name);
+                            },
+                            set(value) {
+                                instance!.setProperty(prop.name, value);
+                            },
+                            enumerable: true,
+                        });
+                    }
+                });
 
-            // globals
-            instance!.definition().globals.forEach((globalName) => {
-                if (componentHandle[globalName] !== undefined) {
-                    console.warn("Duplicated property name " + globalName);
-                } else {
-                    let globalObject = Object.create({});
+                instance!.definition().callbacks.forEach((cb) => {
+                    let callbackName = cb.replace(/-/g, "_");
 
-                    instance!.definition().globalProperties(globalName).forEach((prop) => {
-                        let propName = prop.name.replace(/-/g, "_");
+                    if (componentHandle[callbackName] !== undefined) {
+                        console.warn("Duplicated callback name " + callbackName);
+                    } else {
+                        Object.defineProperty(componentHandle, cb.replace(/-/g, "_"), {
+                            get() {
+                                return function () {
+                                    return instance!.invoke(cb, Array.from(arguments));
+                                };
+                            },
+                            set(callback) {
+                                instance!.setCallback(cb, callback);
+                            },
+                            enumerable: true,
+                        });
+                    }
+                });
 
-                        if (globalObject[propName] !== undefined) {
-                            console.warn("Duplicated property name " + propName + " on global " + global);
-                        } else {
-                            Object.defineProperty(globalObject, propName, {
-                                get() {
-                                    return instance!.getGlobalProperty(globalName, prop.name);
-                                },
-                                set(value) {
-                                    instance!.setGlobalProperty(globalName, prop.name, value);
-                                },
-                                enumerable: true,
-                            });
-                        }
-                    });
+                instance!.definition().functions.forEach((cb) => {
+                    let functionName = cb.replace(/-/g, "_");
 
-                    instance!.definition().globalCallbacks(globalName).forEach((cb) => {
-                        let callbackName = cb.replace(/-/g, "_");
+                    if (componentHandle[functionName] !== undefined) {
+                        console.warn("Duplicated function name " + functionName);
+                    } else {
+                        Object.defineProperty(componentHandle, cb.replace(/-/g, "_"), {
+                            get() {
+                                return function () {
+                                    return instance!.invoke(cb, Array.from(arguments));
+                                };
+                            },
+                            enumerable: true,
+                        });
+                    }
+                });
 
-                        if (globalObject[callbackName] !== undefined) {
-                            console.warn("Duplicated property name " + cb + " on global " + global);
-                        } else {
-                            Object.defineProperty(globalObject, cb.replace(/-/g, "_"), {
-                                get() {
-                                    return function () {
-                                        return instance!.invokeGlobal(globalName, cb, Array.from(arguments));
-                                    };
-                                },
-                                set(callback) {
-                                    instance!.setGlobalCallback(globalName, cb, callback);
-                                },
-                                enumerable: true,
-                            });
-                        }
-                    });
+                // globals
+                instance!.definition().globals.forEach((globalName) => {
+                    if (componentHandle[globalName] !== undefined) {
+                        console.warn("Duplicated property name " + globalName);
+                    } else {
+                        let globalObject = Object.create({});
 
-                    Object.defineProperty(componentHandle, globalName, {
-                        get() {
-                            return globalObject;
-                        },
-                        enumerable: true,
-                    });
-                }
-            });
+                        instance!.definition().globalProperties(globalName).forEach((prop) => {
+                            let propName = prop.name.replace(/-/g, "_");
 
-            return Object.seal(componentHandle);
-        },
+                            if (globalObject[propName] !== undefined) {
+                                console.warn("Duplicated property name " + propName + " on global " + global);
+                            } else {
+                                Object.defineProperty(globalObject, propName, {
+                                    get() {
+                                        return instance!.getGlobalProperty(globalName, prop.name);
+                                    },
+                                    set(value) {
+                                        instance!.setGlobalProperty(globalName, prop.name, value);
+                                    },
+                                    enumerable: true,
+                                });
+                            }
+                        });
+
+                        instance!.definition().globalCallbacks(globalName).forEach((cb) => {
+                            let callbackName = cb.replace(/-/g, "_");
+
+                            if (globalObject[callbackName] !== undefined) {
+                                console.warn("Duplicated property name " + cb + " on global " + global);
+                            } else {
+                                Object.defineProperty(globalObject, cb.replace(/-/g, "_"), {
+                                    get() {
+                                        return function () {
+                                            return instance!.invokeGlobal(globalName, cb, Array.from(arguments));
+                                        };
+                                    },
+                                    set(callback) {
+                                        instance!.setGlobalCallback(globalName, cb, callback);
+                                    },
+                                    enumerable: true,
+                                });
+                            }
+                        });
+
+                        instance!.definition().globalFunctions(globalName).forEach((cb) => {
+                            let functionName = cb.replace(/-/g, "_");
+
+                            if (globalObject[functionName] !== undefined) {
+                                console.warn("Duplicated function name " + cb + " on global " + global);
+                            } else {
+                                Object.defineProperty(globalObject, cb.replace(/-/g, "_"), {
+                                    get() {
+                                        return function () {
+                                            return instance!.invokeGlobal(globalName, cb, Array.from(arguments));
+                                        };
+                                    },
+                                    enumerable: true,
+                                });
+                            }
+                        });
+
+                        Object.defineProperty(componentHandle, globalName, {
+                            get() {
+                                return globalObject;
+                            },
+                            enumerable: true,
+                        });
+                    }
+                });
+
+                return Object.seal(componentHandle);
+            },
+        });
     });
-
     return Object.seal(slint_module);
 }
 
 /**
- * Loads the given Slint file and returns an objects that contains a functions to construct the exported
- * component of the slint file.
+ * Loads the specified Slint file and returns an object containing functions to construct the exported
+ * components defined within the Slint file.
  *
  * The following example loads a "Hello World" style Slint file and changes the Text label to a new greeting:
- * `main.slint`:
+ * **`main.slint`**:
  * ```
- * export component Main {
+ * export component Main inherits Window {
  *     in-out property <string> greeting <=> label.text;
  *     label := Text {
  *         text: "Hello World";
@@ -815,34 +903,33 @@ function loadSlint(loadData: LoadData): Object {
  * }
  * ```
  *
- * ```js
+ * **`index.js`**:
+ * ```javascript
  * import * as slint from "slint-ui";
  * let ui = slint.loadFile("main.slint");
  * let main = new ui.Main();
  * main.greeting = "Hello friends";
  * ```
  *
- * @param filePath A path to the file to load. If the path is a relative path, then it is resolved
- *                 against the process' working directory.
- * @param options Use {@link LoadFileOptions} to configure additional Slint compilation aspects,
+ * @param filePath The path to the file to load. Relative paths are resolved against the process' current working directory.
+ * @param options An optional {@link LoadFileOptions} to configure additional Slint compilation settings,
  *                such as include search paths, library imports, or the widget style.
- * @returns The returned object is sealed and provides a property by the name of the component exported
- *          in the `.slint` file. In the above example the name of the property is `Main`. The property
- *          is a constructor function. Use it with the new operator to instantiate the component.
- *          The instantiated object exposes properties and callbacks, and implements the {@link ComponentHandle} interface.
- *          For more details about the exposed properties, see [Instantiating A Component](../index.html#md:instantiating-a-component).
+ * @returns Returns an object that is immutable and provides a constructor function for each exported Window component found in the `.slint` file.
+ *          For instance, in the example above, a `Main` property is available, which can be used to create instances of the `Main` component using the `new` keyword.
+ *          These instances offer properties and event handlers, adhering to the {@link ComponentHandle} interface.
+ *          For further information on the available properties, refer to [Instantiating A Component](../index.html#md:instantiating-a-component).
  * @throws {@link CompileError} if errors occur during compilation.
  */
 export function loadFile(filePath: string, options?: LoadFileOptions): Object {
     return loadSlint({
-        fileData:{ filePath, options },
-        from:'file',
+        fileData: { filePath, options },
+        from: 'file',
     })
 }
 
 /**
- * Loads the given Slint source code and returns an object that contains a function to construct the exported
- * component of the Slint source code.
+ * Loads the given Slint source code and returns an object that contains a functions to construct the exported
+ * components of the Slint source code.
  *
  * The following example loads a "Hello World" style Slint source code and changes the Text label to a new greeting:
  * ```js
@@ -858,21 +945,20 @@ export function loadFile(filePath: string, options?: LoadFileOptions): Object {
  * main.greeting = "Hello friends";
  * ```
  * @param source The Slint source code to load.
- * @param filePath A path to the file to show log. If the path is a relative path, then it is resolved
- *                 against the process' working directory.
- * @param options Use {@link LoadFileOptions} to configure additional Slint compilation aspects,
+ * @param filePath A path to the file to show log and resolve relative import and images.
+ *                 Relative paths are resolved against the process' current working directory.
+ * @param options An optional {@link LoadFileOptions} to configure additional Slint compilation settings,
  *                such as include search paths, library imports, or the widget style.
- * @returns The returned object is sealed and provides a property by the name of the component exported
- *          in the `.slint` file. In the above example the name of the property is `Main`. The property
- *          is a constructor function. Use it with the new operator to instantiate the component.
- *          The instantiated object exposes properties and callbacks, and implements the {@link ComponentHandle} interface.
- *          For more details about the exposed properties, see [Instantiating A Component](../index.html#md:instantiating-a-component).
+ * @returns Returns an object that is immutable and provides a constructor function for each exported Window component found in the `.slint` file.
+ *          For instance, in the example above, a `Main` property is available, which can be used to create instances of the `Main` component using the `new` keyword.
+ *          These instances offer properties and event handlers, adhering to the {@link ComponentHandle} interface.
+ *          For further information on the available properties, refer to [Instantiating A Component](../index.html#md:instantiating-a-component).
  * @throws {@link CompileError} if errors occur during compilation.
  */
 export function loadSource(source: string, filePath: string, options?: LoadFileOptions): Object {
     return loadSlint({
-        fileData:{ filePath, options, source },
-        from:'source',
+        fileData: { filePath, options, source },
+        from: 'source',
     })
 }
 
@@ -884,7 +970,7 @@ class EventLoop {
     constructor() {
     }
 
-    start(running_callback?: Function): Promise<unknown> {
+    start(running_callback?: Function, quitOnLastWindowClosed: boolean = true): Promise<unknown> {
         if (this.#terminationPromise != null) {
             return this.#terminationPromise;
         }
@@ -893,6 +979,8 @@ class EventLoop {
             this.#terminateResolveFn = resolve;
         });
         this.#quit_loop = false;
+
+        napi.setQuitOnLastWindowClosed(quitOnLastWindowClosed);
 
         if (running_callback != undefined) {
             napi.invokeFromEventLoop(() => {
@@ -930,8 +1018,13 @@ var globalEventLoop: EventLoop = new EventLoop;
  * If the event loop is already running, then this function returns the same promise as from
  * the earlier invocation.
  *
- * @param runningCallback Optional callback that's invoked once when the event loop is running.
+ * @param args As Function it defines a callback that's invoked once when the event loop is running.
+ * @param args.runningCallback Optional callback that's invoked once when the event loop is running.
  *                         The function's return value is ignored.
+ * @param args.quitOnLastWindowClosed if set to `true` event loop is quit after last window is closed otherwise
+ *                          it is closed after {@link quitEventLoop} is called.
+ *                          This is useful for system tray applications where the application needs to stay alive even if no windows are visible.
+ *                          (default true).
  *
  * Note that the event loop integration with Node.js is slightly imperfect. Due to conflicting
  * implementation details between Slint's and Node.js' event loop, the two loops are merged
@@ -939,8 +1032,16 @@ var globalEventLoop: EventLoop = new EventLoop;
  * application is idle, it continues to consume a low amount of CPU cycles, checking if either
  * event loop has any pending events.
  */
-export function runEventLoop(runningCallback?: Function): Promise<unknown> {
-    return globalEventLoop.start(runningCallback)
+export function runEventLoop(args?: Function | { runningCallback?: Function; quitOnLastWindowClosed?: boolean }): Promise<unknown> {
+    if (args === undefined) {
+        return globalEventLoop.start(undefined);
+    }
+
+    if (args instanceof Function) {
+        return globalEventLoop.start(args);
+    }
+
+    return globalEventLoop.start(args.runningCallback, args.quitOnLastWindowClosed);
 }
 
 /**
@@ -956,6 +1057,7 @@ export function quitEventLoop() {
  */
 export namespace private_api {
     export import mock_elapsed_time = napi.mockElapsedTime;
+    export import get_mocked_time = napi.getMockedTime;
     export import ComponentCompiler = napi.ComponentCompiler;
     export import ComponentDefinition = napi.ComponentDefinition;
     export import ComponentInstance = napi.ComponentInstance;
@@ -976,18 +1078,12 @@ export namespace private_api {
         component.component_instance.sendMouseClick(x, y);
     }
 
-    export function send_mouse_double_click(
-        component: Component,
-        x: number,
-        y: number
-    ) {
-        component.component_instance.sendMouseDoubleClick(x, y);
-    }
-
     export function send_keyboard_string_sequence(
         component: Component,
         s: string
     ) {
         component.component_instance.sendKeyboardStringSequence(s);
     }
+
+    export import initTesting = napi.initTesting;
 }

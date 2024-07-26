@@ -1,4 +1,4 @@
-<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial -->
+<!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0 -->
 
 ![Slint](./logo/slint-logo-full-light.svg#gh-light-mode-only) ![Slint](./logo/slint-logo-full-dark.svg#gh-dark-mode-only)
 
@@ -28,6 +28,9 @@ is derived from our design goals:
     system APIs, utilize all CPU and GPU cores, connect to any peripheral.
 
 We invite you to use Slint and be part of its community.
+
+Visit [#MadeWithSlint](https://madewithslint.com) to view some of the projects
+using Slint and join us in the Slint community.
 
 ## Current Status
 
@@ -178,19 +181,13 @@ We have a few tools to help with the development of .slint files:
 Please check our [Editors README](./editors/README.md) for tips on how to
 configure your favorite editor to work well with Slint.
 
-## #MadeWithSlint
-
-Visit <https://madewithslint.com> to view some of the projects using Slint.
-Contact us or open a pull request on <https://github.com/slint-ui/madewithslint>
-to add yours.
-
 ## License
 
 You can use Slint under ***any*** of the following licenses, at your choice:
 
-1. [Royalty-free license](LICENSES/LicenseRef-Slint-Royalty-free-1.1.md),
+1. [Royalty-free license](LICENSES/LicenseRef-Slint-Royalty-free-2.0.md),
 2. [GNU GPLv3](LICENSES/GPL-3.0-only.txt),
-3. [Paid license](https://slint.dev/pricing.html).
+3. [Paid license](LICENSES/LicenseRef-Slint-Software-3.0.md).
 
 See also the [Licensing FAQ](FAQ.md#licensing)
 
@@ -246,17 +243,17 @@ You can of course also contact us privately via email to [info@slint.dev](mailto
 [#12]: https://slint.dev/demos/energy-monitor/
 [#13]: https://slint.dev/resources/gallery_screenshot.png "Gallery Demo"
 [#14]: https://slint.dev/demos/gallery/
-[#15]: https://slint.dev/docs/cpp
-[#16]: https://slint.dev/docs/tutorial/cpp
+[#15]: https://slint.dev/latest/docs/cpp
+[#16]: https://slint.dev/latest/docs/quickstart/cpp
 [#17]: https://github.com/slint-ui/slint-cpp-template
 [#18]: https://img.shields.io/crates/v/slint
 [#19]: https://crates.io/crates/slint
-[#20]: https://slint.dev/docs/rust/slint/
-[#21]: https://slint.dev/docs/tutorial/rust
+[#20]: https://slint.dev/latest/docs/rust/slint/
+[#21]: https://slint.dev/latest/docs/quickstart/rust
 [#22]: https://youtu.be/WBcv4V-whHk
 [#23]: https://github.com/slint-ui/slint-rust-template
 [#24]: https://img.shields.io/npm/v/slint-ui
 [#25]: https://www.npmjs.com/package/slint-ui
-[#26]: https://slint.dev/docs/node
-[#27]: https://slint.dev/docs/tutorial/node
+[#26]: https://slint.dev/latest/docs/node
+[#27]: https://slint.dev/latest/docs/quickstart/node
 [#28]: https://github.com/slint-ui/slint-nodejs-template

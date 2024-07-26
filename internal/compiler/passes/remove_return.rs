@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -7,15 +7,7 @@ use crate::expression_tree::Expression;
 use crate::langtype::Type;
 
 pub fn remove_return(doc: &crate::object_tree::Document) {
-    for component in doc
-        .root_component
-        .used_types
-        .borrow()
-        .sub_components
-        .iter()
-        .chain(doc.root_component.used_types.borrow().globals.iter())
-        .chain(std::iter::once(&doc.root_component))
-    {
+    doc.visit_all_used_components(|component| {
         crate::object_tree::visit_all_expressions(component, |e, _| {
             let mut ret_ty = None;
             fn visit(e: &Expression, ret_ty: &mut Option<Type>) {
@@ -34,7 +26,7 @@ pub fn remove_return(doc: &crate::object_tree::Document) {
             let ctx = RemoveReturnContext { ret_ty };
             *e = process_expression(std::mem::take(e), &ctx).to_expression(&ctx.ret_ty);
         })
-    }
+    });
 }
 
 fn process_expression(e: Expression, ctx: &RemoveReturnContext) -> ExpressionResult {
@@ -80,6 +72,9 @@ fn process_expression(e: Expression, ctx: &RemoveReturnContext) -> ExpressionRes
                     }
                 }
             }
+        }
+        Expression::Cast { from, to } => {
+            process_expression(*from, ctx).map_value(|e| Expression::Cast { from: e.into(), to })
         }
         e => {
             // Normally there shouldn't be any 'return' statements in there since return are not allowed in arbitrary expressions
@@ -268,7 +263,7 @@ impl ExpressionResult {
                 let load =
                     Box::new(Expression::ReadLocalVariable { name: name.clone(), ty: value.ty() });
                 Expression::CodeBlock(vec![
-                    Expression::StoreLocalVariable { name: name.into(), value: value.into() },
+                    Expression::StoreLocalVariable { name, value: value.into() },
                     Expression::Condition {
                         condition: Expression::StructFieldAccess {
                             base: load.clone(),
@@ -305,11 +300,7 @@ impl ExpressionResult {
                 [
                     (FIELD_CONDITION, Type::Bool, Expression::BoolLiteral(true)),
                     (FIELD_ACTUAL, e.ty(), e),
-                    (
-                        FIELD_RETURNED.into(),
-                        ret_ty.clone(),
-                        Expression::default_value_for_type(ret_ty),
-                    ),
+                    (FIELD_RETURNED, ret_ty.clone(), Expression::default_value_for_type(ret_ty)),
                 ]
                 .into_iter(),
             ),
@@ -347,14 +338,66 @@ impl ExpressionResult {
                 codeblock_with_expr(pre_statements, o)
             }
             ExpressionResult::Return(r) => make_struct(
-                [(FIELD_CONDITION.into(), Type::Bool, Expression::BoolLiteral(false))]
+                [(FIELD_CONDITION, Type::Bool, Expression::BoolLiteral(false))]
                     .into_iter()
                     .chain(r.map(|r| (FIELD_RETURNED, ret_ty.clone(), r)))
                     .chain((!matches!(ty, Type::Void | Type::Invalid)).then(|| {
-                        (FIELD_ACTUAL.into(), ty.clone(), Expression::default_value_for_type(ty))
+                        (FIELD_ACTUAL, ty.clone(), Expression::default_value_for_type(ty))
                     })),
             ),
             ExpressionResult::ReturnObject { value, .. } => value,
+        }
+    }
+
+    fn map_value(self, f: impl FnOnce(Expression) -> Expression) -> Self {
+        match self {
+            ExpressionResult::Just(e) => ExpressionResult::Just(f(e)),
+            ExpressionResult::Return(e) => ExpressionResult::Return(e),
+            ExpressionResult::MaybeReturn {
+                pre_statements,
+                condition,
+                returned_value,
+                actual_value,
+            } => ExpressionResult::MaybeReturn {
+                pre_statements,
+                condition,
+                returned_value,
+                actual_value: actual_value.map(f),
+            },
+            ExpressionResult::ReturnObject { value, has_value, has_return_value } => {
+                if !has_value {
+                    return ExpressionResult::ReturnObject { value, has_value, has_return_value };
+                }
+                static COUNT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let name = format!(
+                    "mapped_expression{}",
+                    COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                );
+                let value_ty = value.ty();
+                let load = |field: &str| Expression::StructFieldAccess {
+                    base: Box::new(Expression::ReadLocalVariable {
+                        name: name.clone(),
+                        ty: value_ty.clone(),
+                    }),
+                    name: field.into(),
+                };
+                let condition = (FIELD_CONDITION, Type::Bool, load(FIELD_CONDITION));
+                let actual = f(load(FIELD_ACTUAL));
+                let actual = (FIELD_ACTUAL, actual.ty(), actual);
+                let ret = has_return_value.then(|| {
+                    let r = load(FIELD_RETURNED);
+                    (FIELD_RETURNED, r.ty(), r)
+                });
+                ExpressionResult::ReturnObject {
+                    value: Expression::CodeBlock(vec![
+                        Expression::StoreLocalVariable { name, value: value.into() },
+                        make_struct([condition, actual].into_iter().chain(ret.into_iter())),
+                    ]),
+                    has_value,
+                    has_return_value,
+                }
+            }
         }
     }
 }
@@ -403,7 +446,7 @@ fn convert_struct(from: Expression, to: Type) -> Expression {
         for (key, ty) in fields {
             let (key, expression) = values
                 .remove_entry(key)
-                .unwrap_or_else(|| (key.clone(), Expression::default_value_for_type(&ty)));
+                .unwrap_or_else(|| (key.clone(), Expression::default_value_for_type(ty)));
             new_values.insert(key, expression);
         }
         return Expression::Struct { values: new_values, ty: to };
@@ -425,7 +468,7 @@ fn convert_struct(from: Expression, to: Type) -> Expression {
                 name: key.clone(),
             }
         } else {
-            Expression::default_value_for_type(&ty)
+            Expression::default_value_for_type(ty)
         };
         new_values.insert(key.clone(), expression);
     }

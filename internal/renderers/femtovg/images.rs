@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -94,6 +94,9 @@ impl Texture {
             ImageRendering::Smooth => femtovg::ImageFlags::empty(),
             ImageRendering::Pixelated => femtovg::ImageFlags::NEAREST,
         };
+
+        let image_flags =
+            image_flags | femtovg::ImageFlags::REPEAT_X | femtovg::ImageFlags::REPEAT_Y;
 
         let image_id = match image {
             #[cfg(target_arch = "wasm32")]

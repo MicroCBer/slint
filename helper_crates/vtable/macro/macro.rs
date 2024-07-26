@@ -70,8 +70,8 @@ This macro does the following transformation:
 For function type fields:
  - The ABI of each functions is changed to `extern "C"`
  - `unsafe` is added to the signature, since it is unsafe to call these functions directly from
-  the vtable without having a valid pointer to the actual object. But if the original function was
-  marked unsafe, the unsafety is forwarded to the trait.
+   the vtable without having a valid pointer to the actual object. But if the original function was
+   marked unsafe, the unsafety is forwarded to the trait.
  - If a field is called `drop`, then it is understood that this is the destructor for a VBox.
    It must have the type `fn(VRefMut<MyVTable>)`
  - If two fields called `drop_in_place` and `dealloc` are present, then they are understood to be
@@ -284,9 +284,6 @@ pub fn vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
             let mut self_call = None;
             let mut forward_code = None;
 
-            #[derive(Default)]
-            struct SelfInfo {}
-
             let mut has_self = false;
 
             for param in &f.inputs {
@@ -396,7 +393,7 @@ pub fn vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                     return Error::new(a.span(), "invalid ABI").to_compile_error().into();
                 }
             } else {
-                f.abi = sig_extern.abi.clone();
+                f.abi.clone_from(&sig_extern.abi);
             }
 
             let mut wrap_trait_call = None;
@@ -439,8 +436,8 @@ pub fn vtable(_attr: TokenStream, item: TokenStream) -> TokenStream {
                             // Safety: The vtable is valid and inner is a type corresponding to the vtable,
                             // which was allocated such that drop is expected.
                             unsafe {
-                                let ptr = &*ptr;
-                                (ptr.vtable.as_ref().#ident)(VRefMut::from_raw(ptr.vtable, ptr.ptr)) }
+                                let (vtable, ptr) = ((*ptr).vtable, (*ptr).ptr);
+                                (vtable.as_ref().#ident)(VRefMut::from_raw(vtable, ptr)) }
                         }
                         fn new_box<X: HasStaticVTable<#vtable_name>>(value: X) -> VBox<#vtable_name> {
                             // Put the object on the heap and get a pointer to it

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use super::*;
 use crate::{items::PropertyAnimation, lengths::LogicalLength};
@@ -197,7 +197,7 @@ impl InterpolatedPropertyValue for i64 {
 
 impl InterpolatedPropertyValue for u8 {
     fn interpolate(&self, target_value: &Self, t: f32) -> Self {
-        ((*self as f32) + (t * ((*target_value as f32) - (*self as f32)))).round().min(255.).max(0.)
+        ((*self as f32) + (t * ((*target_value as f32) - (*self as f32)))).round().clamp(0., 255.)
             as u8
     }
 }
@@ -333,8 +333,6 @@ impl<T: Clone + InterpolatedPropertyValue + 'static> Property<T> {
 #[cfg(test)]
 mod animation_tests {
     use super::*;
-    use crate::items::PropertyAnimation;
-    use std::rc::Rc;
 
     #[derive(Default)]
     struct Component {

@@ -12,6 +12,7 @@
          SLINT_STYLE=fluent wasm-pack build --release --out-dir pkg/fluent --target web
          SLINT_STYLE=material wasm-pack build --release --out-dir pkg/material --target web
          SLINT_STYLE=cupertino wasm-pack build --release --out-dir pkg/cupertino --target web
+         SLINT_STYLE=cosmic wasm-pack build --release --out-dir pkg/cosmic --target web
   -->
 
 <head>
@@ -35,6 +36,7 @@
       <option value="fluent">Fluent</option>
       <option value="material">Material</option>
       <option value="cupertino">Cupertino</option>
+      <option value="cosmic">Cosmic</option>
     </select>
   </p>
   <div id="canvas-parent"></div>
@@ -46,27 +48,39 @@
     </a>
   </p>
   <script type="module">
+    var galleries = [];
+    var currentGallery = undefined;
+
     function initGallery(gallery) {
       document.getElementById("spinner").hidden = false;
 
-      let canvas = document.getElementById("canvas");
+      if (currentGallery !== undefined) {
+        let currentGalleryCanvas = document.getElementById("canvas");
 
-      // remove old canvas and unload window
-      if (canvas != undefined) {
-        canvas.remove();
+        // remove old canvas and unload window
+        if (currentGalleryCanvas != undefined) {
+          document.getElementById("canvas-parent").removeChild(currentGalleryCanvas);
+        }
       }
 
-      import(gallery).then(module => {
-        let canvas = document.createElement("canvas");
-        canvas.id = "canvas";
-        canvas.dataset.slintAutoResizeToPreferred = "true";
+      if (galleries[gallery] !== undefined) {
+        document.getElementById("canvas-parent").appendChild(galleries[gallery]);
+        document.getElementById("spinner").hidden = true;
+      } else {
+        import(gallery).then(module => {
+          let canvas = document.createElement("canvas");
+          canvas.id = "canvas";
+          canvas.dataset.slintAutoResizeToPreferred = "true";
+          currentGallery = gallery;
+          galleries[gallery] = canvas;
 
-        document.getElementById("canvas-parent").appendChild(canvas);
-        module.default().finally(() => {
-          document.getElementById("canvas").hidden = false;
-          document.getElementById("spinner").hidden = true;
-        });
-      })
+          document.getElementById("canvas-parent").appendChild(canvas);
+          module.default().finally(() => {
+            document.getElementById("canvas").hidden = false;
+            document.getElementById("spinner").hidden = true;
+          });
+        })
+      }
     }
 
     var styleSelection = document.getElementById("style-selection");
@@ -79,18 +93,22 @@
     styleSelection.onchange = loadGallery;
 
     window.addEventListener('load', () => {
-      let url = document.location.href;
-      if (url.indexOf('?') > -1) {
-        let params = url.split('?')[1].split('&'),
-          data = {}, tmp, val;
-        for (let i = 0, l = params.length; i < l; i++) {
-          tmp = params[i].split('=');
-          data[tmp[0]] = tmp[1];
+      const urlParams = new URLSearchParams(window.location.search);
+      const style = urlParams.get('style');
+      if (style) {
+        document.getElementById('style-selection').value = style.split(',')[0];
+      } else {
+        const userAgent = window.navigator.userAgent.toLowerCase();
+        let defaultStyle = '';
+        if (userAgent.indexOf('mac') !== -1 || userAgent.indexOf('iphone') !== -1 || userAgent.indexOf('ipad') !== -1) {
+          defaultStyle = 'cupertino';
+        } else if (userAgent.indexOf('windows') !== -1) {
+          defaultStyle = 'fluent';
+        } else if (userAgent.indexOf('android') !== -1) {
+          defaultStyle = 'material';
         }
-        val = data.style.split(',');
-        for (let i = 0, l = val.length; i < l; i++) {
-          document.getElementById('style-selection').value = val[i];
-          break;
+        if (defaultStyle) {
+          document.getElementById('style-selection').value = defaultStyle;
         }
       }
       loadGallery();

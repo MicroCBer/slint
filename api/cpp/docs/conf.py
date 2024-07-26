@@ -1,5 +1,5 @@
 # Copyright © SixtyFPS GmbH <info@slint.dev>
-# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-commercial
+# SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Software-3.0
 
 # Configuration file for the Sphinx documentation builder.
 #
@@ -22,7 +22,7 @@ import textwrap
 # -- Project information -----------------------------------------------------
 
 # The full version, including alpha/beta/rc tags
-version = "1.3.2"
+version = "1.7.1"
 
 project = f'Slint {version} C++ API'
 copyright = "SixtyFPS GmbH"
@@ -35,7 +35,8 @@ cpp_index_common_prefix = ["slint::", "slint::interpreter::"]
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["breathe", "myst_parser", "exhale", "sphinx_markdown_tables", "sphinxcontrib.jquery"]
+extensions = ["breathe", "myst_parser", "exhale",
+              "sphinx_markdown_tables", "sphinxcontrib.jquery"]
 
 breathe_projects = {"Slint": "./docs/xml"}
 breathe_default_project = "Slint"
@@ -61,8 +62,8 @@ exhale_args = {
     "kindsWithContentsDirectives": [],
     "exhaleExecutesDoxygen": True,
     "exhaleDoxygenStdin": """INPUT = ../../api/cpp/include generated_include
-EXCLUDE_SYMBOLS = slint::cbindgen_private* slint::private_api* vtable* slint::testing* SLINT_DECL_ITEM
-EXCLUDE = ../../api/cpp/include/vtable.h ../../api/cpp/include/slint_testing.h
+EXCLUDE_SYMBOLS = slint::cbindgen_private* slint::private_api* vtable* SLINT_DECL_ITEM
+EXCLUDE = ../../api/cpp/include/vtable.h ../../api/cpp/include/slint_tests_helper.h
 ENABLE_PREPROCESSING = YES
 PREDEFINED += DOXYGEN
 INCLUDE_PATH = generated_include
@@ -108,7 +109,7 @@ html_show_sourcelink = False
 html_logo = "https://slint.dev/logo/slint-logo-small-light.svg"
 
 myst_enable_extensions = [
-    "html_image",
+    "html_image", "colon_fence"
 ]
 
 # Annotate h1/h2 elements with anchors
@@ -121,7 +122,7 @@ myst_url_schemes = {
 
 rst_epilog = """
 .. |ListView| replace:: :code:`ListView`
-.. _ListView: ../../slint/src/builtins/widgets.html#listview
+.. _ListView: ../../slint/src/language/widgets/listview
 .. |Repetition| replace:: :code:`for` - :code:`in`
 .. _Repetition: ../../slint/src/reference/repetitions.html
 """

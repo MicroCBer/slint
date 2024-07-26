@@ -104,7 +104,7 @@ pub fn init() {
     .ok()
     .unwrap();
 
-    unsafe { ALLOCATOR.init(&mut HEAP as *const u8 as usize, core::mem::size_of_val(&HEAP)) }
+    unsafe { ALLOCATOR.init(core::ptr::addr_of_mut!(HEAP) as usize, HEAP_SIZE) }
 
     let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().raw());
 
@@ -381,7 +381,7 @@ impl<
     ) {
         render_fn(&mut self.buffer[range.clone()]);
 
-        // convert from little to big indian before sending to the DMA channel
+        // convert from little to big endian before sending to the DMA channel
         for x in &mut self.buffer[range.clone()] {
             *x = Rgb565Pixel(x.0.to_be())
         }

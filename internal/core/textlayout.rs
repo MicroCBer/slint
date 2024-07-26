@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! module for basic text layout
 //!
@@ -12,7 +12,7 @@
 //! 3. Loop over all glyph clusters as well as the line break opportunities produced by the unicode line break algorithm:
 //!     Sum up the width of all glyph clusters until the next line break opportunity (encapsulated in FragmentIterator), record separately the width of
 //!     trailing space within the fragment.
-//!     If the width of the current line (including trailing whitespace) and the new fragment of glyph clusters (without trailing whitepace) is less or
+//!     If the width of the current line (including trailing whitespace) and the new fragment of glyph clusters (without trailing whitespace) is less or
 //!         equal to the available width:
 //!         Add fragment of glyph clusters to the current line
 //!     Else:
@@ -21,6 +21,7 @@
 //!         Emit current line as new line
 //!
 
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 
 use euclid::num::{One, Zero};
@@ -61,6 +62,7 @@ impl<'a, Font: AbstractFont> TextLayout<'a, Font> {
         &self,
         text: &str,
         max_width: Option<Font::Length>,
+        text_wrap: TextWrap,
     ) -> (Font::Length, Font::Length)
     where
         Font::Length: core::fmt::Debug,
@@ -69,7 +71,7 @@ impl<'a, Font: AbstractFont> TextLayout<'a, Font> {
         let mut line_count: i16 = 0;
         let shape_buffer = ShapeBuffer::new(self, text);
 
-        for line in TextLineBreaker::<Font>::new(text, &shape_buffer, max_width, None) {
+        for line in TextLineBreaker::<Font>::new(text, &shape_buffer, max_width, None, text_wrap) {
             max_line_width = euclid::approxord::max(max_line_width, line.text_width);
             line_count += 1;
         }
@@ -113,7 +115,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
         ) -> core::ops::ControlFlow<R>,
         selection: Option<core::ops::Range<usize>>,
     ) -> Result<Font::Length, R> {
-        let wrap = self.wrap == TextWrap::WordWrap;
+        let wrap = self.wrap != TextWrap::NoWrap;
         let elide = self.overflow == TextOverflow::Elide;
         let elide_glyph = if elide {
             self.layout.font.glyph_for_char('…').filter(|glyph| glyph.glyph_id.is_some())
@@ -131,6 +133,7 @@ impl<'a, Font: AbstractFont> TextParagraphLayout<'a, Font> {
                 &shape_buffer,
                 if wrap { Some(self.max_width) } else { None },
                 if elide { Some(self.layout.font.max_lines(self.max_height)) } else { None },
+                self.wrap,
             )
         };
         let mut text_lines = None;
@@ -434,9 +437,7 @@ fn test_elision() {
         .layout_lines::<()>(
             |glyphs, _, _, _, _| {
                 lines.push(
-                    glyphs
-                        .map(|positioned_glyph| positioned_glyph.glyph_id.clone())
-                        .collect::<Vec<_>>(),
+                    glyphs.map(|positioned_glyph| positioned_glyph.glyph_id).collect::<Vec<_>>(),
                 );
                 core::ops::ControlFlow::Continue(())
             },
@@ -478,9 +479,7 @@ fn test_exact_fit() {
         .layout_lines::<()>(
             |glyphs, _, _, _, _| {
                 lines.push(
-                    glyphs
-                        .map(|positioned_glyph| positioned_glyph.glyph_id.clone())
-                        .collect::<Vec<_>>(),
+                    glyphs.map(|positioned_glyph| positioned_glyph.glyph_id).collect::<Vec<_>>(),
                 );
                 core::ops::ControlFlow::Continue(())
             },
@@ -522,9 +521,7 @@ fn test_no_line_separators_characters_rendered() {
         .layout_lines::<()>(
             |glyphs, _, _, _, _| {
                 lines.push(
-                    glyphs
-                        .map(|positioned_glyph| positioned_glyph.glyph_id.clone())
-                        .collect::<Vec<_>>(),
+                    glyphs.map(|positioned_glyph| positioned_glyph.glyph_id).collect::<Vec<_>>(),
                 );
                 core::ops::ControlFlow::Continue(())
             },
@@ -583,7 +580,7 @@ fn test_cursor_position() {
     assert_eq!(paragraph.cursor_pos_for_byte_offset(text.len()), (10. * 5., 10.));
 
     let first_space_offset =
-        text.char_indices().find_map(|(offset, ch)| ch.is_whitespace().then(|| offset)).unwrap();
+        text.char_indices().find_map(|(offset, ch)| ch.is_whitespace().then_some(offset)).unwrap();
     assert_eq!(paragraph.cursor_pos_for_byte_offset(first_space_offset), (5. * 10., 0.));
     assert_eq!(paragraph.cursor_pos_for_byte_offset(first_space_offset + 15), (10. * 10., 0.));
     assert_eq!(paragraph.cursor_pos_for_byte_offset(first_space_offset + 16), (10. * 10., 0.));
@@ -634,7 +631,7 @@ fn test_byte_offset() {
     let font = FixedTestFont;
     let text = "Hello                    World";
     let mut end_helper_text = text.to_string();
-    end_helper_text.push_str("!");
+    end_helper_text.push('!');
 
     let paragraph = TextParagraphLayout {
         string: text,

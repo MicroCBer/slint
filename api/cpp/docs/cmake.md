@@ -15,10 +15,10 @@
 
 ## Install Slint
 
-To install Slint, either download the [binary packages](#install-binary-packages) or [build from sources](#build-from-sources).  
+To install Slint, either download the [binary packages](#install-binary-packages) or [build from sources](#build-from-sources).
 
 *Note*: Binary packages are available for only Linux and Windows on x86-64 architecture. The recommended and most flexible way to use the C++ API is to build Slint from sources.
-  
+
 ### Install Binary Packages
 
 The Slint binary packages work without any Rust development environment.
@@ -32,7 +32,7 @@ Steps:
 3. From "Assets" ("XXX" refers to the version of the latest release),
 
    * for Linux x86-64 architecture - download `slint-cpp-XXX-Linux-x86_64.tar.gz`
-   * for Windows x86-64 architecture - download `slint-cpp-XXX-win64.exe`
+   * for Windows x86-64 architecture - download `slint-cpp-XXX-win64-MSVC.exe`
 
 4. Unpack the downloaded archive (Linux) or run the installer executable (Windows).
 
@@ -49,7 +49,7 @@ In the next section you will learn how to use the installed library in your appl
 First you need to install the prerequisites:
 
 * Install Rust by following the [Rust Getting Started Guide](https://www.rust-lang.org/learn/get-started). If you already
-  have Rust installed, make sure that it's at least version 1.60 or newer. You can check which version you have installed
+  have Rust installed, make sure that it's at least version 1.73 or newer. You can check which version you have installed
   by running `rustc --version`. Once this is done, you should have the `rustc` compiler and the `cargo` build system installed in your path.
 
 You can either choose to compile Slint from source along with your application or include Slint as an external CMake package.
@@ -72,17 +72,6 @@ FetchContent_MakeAvailable(Slint)
 
 * To include Slint as an external CMake package, build Slint from source like a regular CMake project, install it into a prefix directory of your choice and use `find_package(Slint)` in your `CMakeLists.txt`.
 
-### Resource Embedding
-
-By default, images or fonts that your Slint files reference are loaded from disk at run-time. This minimises build times, but requires that the directory structure with the files remains stable. If you want to build a program that runs anywhere, then you can configure the Slint compiler to embed such sources into the binary.
-
-Set the `SLINT_EMBED_RESOURCES` target property on your CMake target to one of the following values:
-
-* `embed-files`: The raw files are embedded in the application binary.
-* `embed-for-software-renderer`: The files will be loaded by the Slint compiler, optimized for use with the software renderer and embedded in the application binary.
-* `as-absolute-path`: The paths of files are made absolute and will be used at run-time to load the resources from the file system. This is the default.
-
-This target property is initialised from the global `DEFAULT_SLINT_EMBED_RESOURCES` cache variable. Set it to configure the default for all CMake targets.
 
 ### Features
 
@@ -104,6 +93,28 @@ to discover and toggle features.
 This works when compiling Slint as a package, using `cmake --build` and
 `cmake --install`, or when including Slint using `FetchContent`.
 
+If you need to check in your application's `CMakeLists.txt` whether a feature is enabled
+or disabled, read the `SLINT_ENABLED_FEATURES` and `SLINT_DISABLED_FEATURES` target
+properties from the `Slint::Slint` cmake target:
+
+```cmake
+get_target_property(slint_enabled_features Slint::Slint SLINT_ENABLED_FEATURES)
+if ("BACKEND_WINIT" IN_LIST slint_enabled_features)
+    ...
+endif()
+```
+
+Similarly, if you need to check for features at compile-time, check for the existence
+of `SLINT_FEATURE_<NAME>` pre-processor macros:
+
+```
+#include <slint.h>
+
+#if defined(SLINT_FEATURE_BACKEND_WINIT)
+// ...
+#endif
+```
+
 ### Rust Flags
 
 Slint uses [Corrosion](https://github.com/corrosion-rs/corrosion) to build Slint, which is developed in Rust. You can utilize [Corrosion's global CMake variables](https://corrosion-rs.github.io/corrosion/usage.html#global-corrosion-options) to control certain aspects of the Rust build process.
@@ -121,8 +132,6 @@ abstraction and window adapter interfaces.
 For more information about the available backends, their system requirements, and configuration
 options, see the [Backend & Renderers Documentation](slint-reference:src/advanced/backends_and_renderers.html).
 
-#### Compile Time Backend Selection
-
 By default Slint will include both the Qt and
 [winit](https://crates.io/crates/winit) back-ends -- if both are detected at
 compile time. You can enable or disable back-ends using the
@@ -133,20 +142,6 @@ project configuration.
 The winit back-end needs a renderer. `SLINT_FEATURE_RENDERER_FEMTOVG` and
 `SLINT_FEATURE_RENDERER_SKIA` are the only stable renderers, the other ones are
 experimental.
-
-#### Run Time Backend Selection
-
-It's also possible to select any of the compiled in backends and renderer at
-runtime, using the `SLINT_BACKEND` environment variable.
-
-* `SLINT_BACKEND=Qt` selects the Qt back-end
-* `SLINT_BACKEND=winit` selects the winit back-end
-* `SLINT_BACKEND=winit-femtovg` selects the winit back-end with the femtovg renderer
-* `SLINT_BACKEND=winit-skia` selects the winit back-end with the skia renderer
-* `SLINT_BACKEND=winit-software` selects the winit back-end with the software renderer
-
-If the selected back-end or renderer isn't available, the default will be used
-instead.
 
 ### Cross-compiling
 
@@ -187,7 +182,28 @@ Set up the environment and build:
 cd <PROJECT_ROOT>
 mkdir build
 cd build
-cmake -DRust_CARGO_TARGET=aarch64-unknown-linux-gnu -DCMAKE_INSTALL_PREFIX=/slint/install/path ...
+cmake -DRust_CARGO_TARGET=aarch64-unknown-linux-gnu -DCMAKE_INSTALL_PREFIX=/slint/install/path ..
 cmake --build .
 cmake --install .
+```
+
+#### Microcontrollers
+
+To target a Microcontroller environment, all of the following additional CMake configuration options must be set when compiling Slint:
+
+| Option                                                        | Description                                                          |
+|---------------------------------------------------------------|----------------------------------------------------------------------|
+| `-DSLINT_FEATURE_FREESTANDING=ON`                             | Enables building for environments without a standard library.        |
+| `-DBUILD_SHARED_LIBS=OFF`                                     | Disables shared library support and instead builds Slint statically. |
+| `-DSLINT_FEATURE_RENDERER_SOFTWARE=ON`                        | Enable support for the software renderer.                            |
+| `-DDEFAULT_SLINT_EMBED_RESOURCES=embed-for-software-renderer` | Default to pre-compiling images and fonts.                           |
+
+
+For example, if you're targeting an MCU with a ARM Cortex-M processor, the complete command line for CMake could look like this:
+
+```sh
+cmake -DRust_CARGO_TARGET=thumbv7em-none-eabihf -DSLINT_FEATURE_FREESTANDING=ON
+      -DBUILD_SHARED_LIBS=OFF -DSLINT_FEATURE_RENDERER_SOFTWARE=ON
+      -DDEFAULT_SLINT_EMBED_RESOURCES=embed-for-software-renderer
+      ..
 ```

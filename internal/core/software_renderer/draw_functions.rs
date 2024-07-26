@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![allow(clippy::identity_op)] // We use x + 0 a lot here for symmetry
 
@@ -8,73 +8,169 @@
 
 use super::{PhysicalLength, PhysicalRect};
 use crate::graphics::{PixelFormat, Rgb8Pixel};
-use crate::lengths::{PointLengths, RectLengths, SizeLengths};
+use crate::lengths::{PointLengths, SizeLengths};
+use crate::software_renderer::fixed::Fixed;
 use crate::Color;
 use derive_more::{Add, Mul, Sub};
 use integer_sqrt::IntegerSquareRoot;
 
 /// Draw one line of the texture in the line buffer
+///
 pub(super) fn draw_texture_line(
     span: &PhysicalRect,
     line: PhysicalLength,
     texture: &super::SceneTexture,
     line_buffer: &mut [impl TargetPixel],
+    extra_clip: i16,
 ) {
-    let super::SceneTexture { data, format, pixel_stride, source_size, color, alpha, rotation } =
-        *texture;
-    let source_size = source_size.cast::<usize>();
-    let span_size = span.size.cast::<usize>();
-    let y = (line - span.origin.y_length()).cast::<usize>();
+    let super::SceneTexture {
+        data,
+        format,
+        pixel_stride,
+        extra: super::SceneTextureExtra { colorize, alpha, rotation, dx, dy, off_x, off_y },
+    } = *texture;
 
-    let line_buffer = &mut line_buffer[span.origin.x as usize..][..span.size.width as usize];
+    let source_size = texture.source_size().cast::<i32>();
+    let len = line_buffer.len();
+    let y = line - span.origin.y_length();
+    let y = if rotation.mirror_width() { span.size.height - y.get() - 1 } else { y.get() } as i32;
 
-    let y = if rotation.mirror_width() { span_size.height - y.get() - 1 } else { y.get() };
+    let off_y = Fixed::<i32, 8>::from_fixed(off_y);
+    let dx = Fixed::<i32, 8>::from_fixed(dx);
+    let dy = Fixed::<i32, 8>::from_fixed(dy);
+    let off_x = Fixed::<i32, 8>::from_fixed(off_x) + dx * extra_clip as i32;
 
     if !rotation.is_transpose() {
-        let y_pos = (y * source_size.height / span_size.height) * pixel_stride as usize;
-        let mut delta = ((source_size.width << 8) / span_size.width) as isize;
-        let mut pos = (y_pos << 8) as isize;
+        let mut delta = dx;
+        // The position where to start in the image array for a this row
+        let mut init = Fixed::from_integer((off_y + dy * y).truncate() % source_size.height)
+            * pixel_stride as i32;
+
+        // the size of the tile in physical pixels in the target
+        let tile_len = (Fixed::from_integer(source_size.width) / delta) as usize;
+        // the amount of missing image pixel on one tile
+        let mut remainder = Fixed::from_integer(source_size.width) % delta;
+        // The position in image pixel where to get the image
+        let mut pos;
+        // the end index in the target buffer
+        let mut end;
+        // the accumulated error in image pixels
+        let mut acc_err;
         if rotation.mirror_height() {
-            pos += (span_size.width as isize - 1) * delta;
+            let o = (off_x + (delta * (len as i32 - 1))) % Fixed::from_integer(source_size.width);
+            pos = init + o;
+            init += Fixed::from_integer(source_size.width);
+            end = (o / delta) as usize + 1;
+            acc_err = -delta + o % delta;
             delta = -delta;
-        };
-        fetch_blend_pixel(
-            line_buffer,
-            format,
-            data,
-            alpha,
-            color,
-            #[inline(always)]
-            |bpp| {
-                let p = (pos as usize >> 8) * bpp;
-                pos += delta;
-                p
-            },
-        );
+            remainder = -remainder;
+        } else {
+            let o = off_x % Fixed::from_integer(source_size.width);
+            pos = init + o;
+            end = ((Fixed::from_integer(source_size.width) - o) / delta) as usize;
+            acc_err = (Fixed::from_integer(source_size.width) - o) % delta;
+            if acc_err != Fixed::default() {
+                acc_err = delta - acc_err;
+                end += 1;
+            }
+        }
+        end = end.min(len);
+        let mut begin = 0;
+        while begin < len {
+            fetch_blend_pixel(
+                &mut line_buffer[begin..end],
+                format,
+                data,
+                alpha,
+                colorize,
+                #[inline(always)]
+                |bpp| {
+                    let p = pos.truncate() as usize * bpp;
+                    pos += delta;
+                    p
+                },
+            );
+            begin = end;
+            end += tile_len;
+            pos = init;
+            pos += acc_err;
+            if remainder != Fixed::from_integer(0) {
+                acc_err -= remainder;
+                let wrap = if rotation.mirror_height() {
+                    acc_err >= Fixed::from_integer(0)
+                } else {
+                    acc_err < Fixed::from_integer(0)
+                };
+                if wrap {
+                    acc_err += delta;
+                    end += 1;
+                }
+            };
+            end = end.min(len);
+        }
     } else {
         let bpp = format.bpp();
-        let col = y * source_size.width / span_size.height;
-        let col = col * bpp;
+        let col = off_x + dx * y;
+        let col = (col.truncate() % source_size.width) as usize * bpp;
         let stride = pixel_stride as usize * bpp;
-        let row_delta = ((source_size.height << 8) / span_size.width) as isize;
-        let (mut row, row_delta) = if rotation.mirror_height() {
-            ((span_size.width as isize - 1) * row_delta, -row_delta)
+        let mut row_delta = dy;
+        let tile_len = (Fixed::from_integer(source_size.height) / row_delta) as usize;
+        let mut remainder = Fixed::from_integer(source_size.height) % row_delta;
+        let mut end;
+        let mut row_init = Fixed::default();
+        let mut row;
+        let mut acc_err;
+        if rotation.mirror_height() {
+            row_init = Fixed::from_integer(source_size.height);
+            row =
+                (off_y + (row_delta * (len as i32 - 1))) % Fixed::from_integer(source_size.height);
+            end = (row / row_delta) as usize + 1;
+            acc_err = -row_delta + row % row_delta;
+            row_delta = -row_delta;
+            remainder = -remainder;
         } else {
-            (0, row_delta)
+            row = off_y % Fixed::from_integer(source_size.height);
+            end = ((Fixed::from_integer(source_size.height) - row) / row_delta) as usize;
+            acc_err = (Fixed::from_integer(source_size.height) - row) % row_delta;
+            if acc_err != Fixed::default() {
+                acc_err = row_delta - acc_err;
+                end += 1;
+            }
         };
-        fetch_blend_pixel(
-            line_buffer,
-            format,
-            data,
-            alpha,
-            color,
-            #[inline(always)]
-            |_| {
-                let pos = (row as usize >> 8) * stride + col;
-                row += row_delta;
-                pos
-            },
-        );
+        end = end.min(len);
+        let mut begin = 0;
+        while begin < len {
+            fetch_blend_pixel(
+                &mut line_buffer[begin..end],
+                format,
+                data,
+                alpha,
+                colorize,
+                #[inline(always)]
+                |_| {
+                    let pos = row.truncate() as usize * stride + col;
+                    row += row_delta;
+                    pos
+                },
+            );
+            begin = end;
+            end += tile_len;
+            row = row_init;
+            row += acc_err;
+            if remainder != Fixed::from_integer(0) {
+                acc_err -= remainder;
+                let wrap = if rotation.mirror_height() {
+                    acc_err >= Fixed::from_integer(0)
+                } else {
+                    acc_err < Fixed::from_integer(0)
+                };
+                if wrap {
+                    acc_err += row_delta;
+                    end += 1;
+                }
+            };
+            end = end.min(len);
+        }
     };
 
     fn fetch_blend_pixel(
@@ -185,6 +281,8 @@ pub(super) fn draw_rounded_rectangle_line(
     line: PhysicalLength,
     rr: &super::RoundedRectangle,
     line_buffer: &mut [impl TargetPixel],
+    extra_left_clip: i16,
+    extra_right_clip: i16,
 ) {
     /// This is an integer shifted by 4 bits.
     /// Note: this is not a "fixed point" because multiplication and sqrt operation operate to
@@ -215,7 +313,7 @@ pub(super) fn draw_rounded_rectangle_line(
             Self(self.0 * rhs.0)
         }
     }
-    let pos_x = span.origin.x as usize;
+    let width = line_buffer.len();
     let y1 = (line - span.origin.y_length()) + rr.top_clip;
     let y2 = (span.origin.y_length() + span.size.height_length() - line) + rr.bottom_clip
         - PhysicalLength::new(1);
@@ -223,6 +321,7 @@ pub(super) fn draw_rounded_rectangle_line(
     debug_assert!(y.get() >= 0,);
     let border = Shifted::new(rr.width.get());
     const ONE: Shifted = Shifted::ONE;
+    const ZERO: Shifted = Shifted(0);
     let anti_alias = |x1: Shifted, x2: Shifted, process_pixel: &mut dyn FnMut(usize, u32)| {
         // x1 and x2 are the coordinate on the top and bottom of the intersection of the pixel
         // line and the curve.
@@ -235,12 +334,13 @@ pub(super) fn draw_rounded_rectangle_line(
         }
     };
     let rev = |x: Shifted| {
-        (Shifted::new(span.size.width) + Shifted::new(rr.right_clip.get())).saturating_sub(x)
+        (Shifted::new(width) + Shifted::new(rr.right_clip.get() + extra_right_clip))
+            .saturating_sub(x)
     };
-    let (x1, x2, x3, x4) = if y < rr.radius {
-        let r = Shifted::new(rr.radius.get());
+    let calculate_xxxx = |r: i16, y: i16| {
+        let r = Shifted::new(r);
         // `y` is how far away from the center of the circle the current line is.
-        let y = r - Shifted::new(y.get());
+        let y = r - Shifted::new(y);
         // Circle equation: x = √(r² - y²)
         // Coordinate from the left edge: x' = r - x
         let x2 = r - (r * r).saturating_sub(y * y).sqrt();
@@ -249,107 +349,131 @@ pub(super) fn draw_rounded_rectangle_line(
         let x4 = r - (r2 * r2).saturating_sub(y * y).sqrt();
         let x3 = r - (r2 * r2).saturating_sub((y - ONE) * (y - ONE)).sqrt();
         (x1, x2, x3, x4)
+    };
+
+    let (x1, x2, x3, x4, x5, x6, x7, x8) = if let Some(r) = rr.radius.as_uniform() {
+        let (x1, x2, x3, x4) =
+            if y.get() < r { calculate_xxxx(r, y.get()) } else { (ZERO, ZERO, border, border) };
+        (x1, x2, x3, x4, rev(x4), rev(x3), rev(x2), rev(x1))
     } else {
-        (Shifted(0), Shifted(0), border, border)
+        let (x1, x2, x3, x4) = if y1 < PhysicalLength::new(rr.radius.top_left) {
+            calculate_xxxx(rr.radius.top_left, y.get())
+        } else if y2 < PhysicalLength::new(rr.radius.bottom_left) {
+            calculate_xxxx(rr.radius.bottom_left, y.get())
+        } else {
+            (ZERO, ZERO, border, border)
+        };
+        let (x5, x6, x7, x8) = if y1 < PhysicalLength::new(rr.radius.top_right) {
+            let x = calculate_xxxx(rr.radius.top_right, y.get());
+            (x.3, x.2, x.1, x.0)
+        } else if y2 < PhysicalLength::new(rr.radius.bottom_right) {
+            let x = calculate_xxxx(rr.radius.bottom_right, y.get());
+            (x.3, x.2, x.1, x.0)
+        } else {
+            (border, border, ZERO, ZERO)
+        };
+        (x1, x2, x3, x4, rev(x5), rev(x6), rev(x7), rev(x8))
     };
     anti_alias(
-        x1.saturating_sub(Shifted::new(rr.left_clip.get())),
-        x2.saturating_sub(Shifted::new(rr.left_clip.get())),
+        x1.saturating_sub(Shifted::new(rr.left_clip.get() + extra_left_clip)),
+        x2.saturating_sub(Shifted::new(rr.left_clip.get() + extra_left_clip)),
         &mut |x, cov| {
-            if x >= span.size.width as usize {
+            if x >= width {
                 return;
             }
-            let c = if border == Shifted(0) { rr.inner_color } else { rr.border_color };
+            let c = if border == ZERO { rr.inner_color } else { rr.border_color };
             let col = PremultipliedRgbaColor {
                 alpha: (((c.alpha as u32) * cov as u32) / 255) as u8,
                 red: (((c.red as u32) * cov as u32) / 255) as u8,
                 green: (((c.green as u32) * cov as u32) / 255) as u8,
                 blue: (((c.blue as u32) * cov as u32) / 255) as u8,
             };
-            line_buffer[pos_x + x].blend(col);
+            line_buffer[x].blend(col);
         },
     );
     if y < rr.width {
-        // up or down border (x2 .. x2)
-        let l = x2.ceil().saturating_sub(rr.left_clip.get() as u32).min(span.size.width as u32)
-            as usize;
-        let r = rev(x2).floor().min(span.size.width as u32) as usize;
+        // up or down border (x2 .. x7)
+        let l = x2
+            .ceil()
+            .saturating_sub((rr.left_clip.get() + extra_left_clip) as u32)
+            .min(width as u32) as usize;
+        let r = x7.floor().min(width as u32) as usize;
         if l < r {
-            TargetPixel::blend_slice(&mut line_buffer[pos_x + l..pos_x + r], rr.border_color)
+            TargetPixel::blend_slice(&mut line_buffer[l..r], rr.border_color)
         }
     } else {
-        if border > Shifted(0) {
+        if border > ZERO {
             // 3. draw the border (between x2 and x3)
             if ONE + x2 <= x3 {
                 TargetPixel::blend_slice(
-                    &mut line_buffer[pos_x
-                        + x2.ceil()
-                            .saturating_sub(rr.left_clip.get() as u32)
-                            .min(span.size.width as u32) as usize
-                        ..pos_x
-                            + x3.floor()
-                                .saturating_sub(rr.left_clip.get() as u32)
-                                .min(span.size.width as u32)
-                                as usize],
+                    &mut line_buffer[x2
+                        .ceil()
+                        .saturating_sub((rr.left_clip.get() + extra_left_clip) as u32)
+                        .min(width as u32) as usize
+                        ..x3.floor()
+                            .saturating_sub((rr.left_clip.get() + extra_left_clip) as u32)
+                            .min(width as u32) as usize],
                     rr.border_color,
                 )
             }
             // 4. anti-aliasing for the contents (x3 .. x4)
             anti_alias(
-                x3.saturating_sub(Shifted::new(rr.left_clip.get())),
-                x4.saturating_sub(Shifted::new(rr.left_clip.get())),
+                x3.saturating_sub(Shifted::new(rr.left_clip.get() + extra_left_clip)),
+                x4.saturating_sub(Shifted::new(rr.left_clip.get() + extra_left_clip)),
                 &mut |x, cov| {
-                    if x >= span.size.width as usize {
+                    if x >= width {
                         return;
                     }
                     let col = interpolate_color(cov, rr.border_color, rr.inner_color);
-                    line_buffer[pos_x + x].blend(col);
+                    line_buffer[x].blend(col);
                 },
             );
         }
         if rr.inner_color.alpha > 0 {
-            // 5. inside (x4 .. x4)
-            let begin =
-                x4.ceil().saturating_sub(rr.left_clip.get() as u32).min(span.size.width as u32);
-            let end = rev(x4).floor().min(span.size.width as u32);
+            // 5. inside (x4 .. x5)
+            let begin = x4
+                .ceil()
+                .saturating_sub((rr.left_clip.get() + extra_left_clip) as u32)
+                .min(width as u32);
+            let end = x5.floor().min(width as u32);
             if begin < end {
                 TargetPixel::blend_slice(
-                    &mut line_buffer[pos_x + begin as usize..pos_x + end as usize],
+                    &mut line_buffer[begin as usize..end as usize],
                     rr.inner_color,
                 )
             }
         }
-        if border > Shifted(0) {
-            // 6. border anti-aliasing: x4..x3
-            anti_alias(rev(x4), rev(x3), &mut |x, cov| {
-                if x >= span.size.width as usize {
+        if border > ZERO {
+            // 6. border anti-aliasing: x5..x6
+            anti_alias(x5, x6, &mut |x, cov| {
+                if x >= width {
                     return;
                 }
                 let col = interpolate_color(cov, rr.inner_color, rr.border_color);
-                line_buffer[pos_x + x].blend(col)
+                line_buffer[x].blend(col)
             });
-            // 7. border x3 .. x2
-            if ONE + x2 <= x3 {
+            // 7. border x6 .. x7
+            if ONE + x6 <= x7 {
                 TargetPixel::blend_slice(
-                    &mut line_buffer[pos_x + rev(x3).ceil().min(span.size.width as u32) as usize
-                        ..pos_x + rev(x2).floor().min(span.size.width as u32) as usize],
+                    &mut line_buffer[x6.ceil().min(width as u32) as usize
+                        ..x7.floor().min(width as u32) as usize],
                     rr.border_color,
                 )
             }
         }
     }
-    anti_alias(rev(x2), rev(x1), &mut |x, cov| {
-        if x >= span.size.width as usize {
+    anti_alias(x7, x8, &mut |x, cov| {
+        if x >= width {
             return;
         }
-        let c = if border == Shifted(0) { rr.inner_color } else { rr.border_color };
+        let c = if border == ZERO { rr.inner_color } else { rr.border_color };
         let col = PremultipliedRgbaColor {
             alpha: (((c.alpha as u32) * (255 - cov) as u32) / 255) as u8,
             red: (((c.red as u32) * (255 - cov) as u32) / 255) as u8,
             green: (((c.green as u32) * (255 - cov) as u32) / 255) as u8,
             blue: (((c.blue as u32) * (255 - cov) as u32) / 255) as u8,
         };
-        line_buffer[pos_x + x].blend(col);
+        line_buffer[x].blend(col);
     });
 }
 
@@ -384,11 +508,9 @@ pub(super) fn draw_gradient_line(
     rect: &PhysicalRect,
     line: PhysicalLength,
     g: &super::GradientCommand,
-    line_buffer: &mut [impl TargetPixel],
+    mut buffer: &mut [impl TargetPixel],
+    extra_left_clip: i16,
 ) {
-    let mut buffer = &mut line_buffer
-        [rect.origin.x as usize..(rect.origin.x_length() + rect.width_length()).get() as usize];
-
     let fill_col1 = g.flags & 0b010 != 0;
     let fill_col2 = g.flags & 0b100 != 0;
     let invert_slope = g.flags & 0b1 != 0;
@@ -418,7 +540,8 @@ pub(super) fn draw_gradient_line(
         (y * size_x * (255 - start)) / (size_y * start)
     } else {
         (size_y - y) * size_x * (255 - start) / (size_y * start)
-    } + g.left_clip.get() as i32;
+    } + g.left_clip.get() as i32
+        + extra_left_clip as i32;
 
     let len = ((255 * size_x) / start) as usize;
 

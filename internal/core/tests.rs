@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Functions useful for testing
 #![warn(missing_docs)]
@@ -22,6 +22,7 @@ pub extern "C" fn slint_mock_elapsed_time(time_in_ms: u64) {
         tick
     });
     crate::timers::TimerList::maybe_activate_timers(tick);
+    crate::properties::ChangeTracker::run_change_handlers();
 }
 
 /// Return the current mocked time.
@@ -44,18 +45,6 @@ pub extern "C" fn slint_send_mouse_click(
     window_adapter.window().dispatch_event(WindowEvent::PointerPressed { position, button });
     slint_mock_elapsed_time(50);
     window_adapter.window().dispatch_event(WindowEvent::PointerReleased { position, button });
-}
-
-/// Simulate a click on a position within the component.
-#[no_mangle]
-pub extern "C" fn slint_send_mouse_double_click(
-    x: f32,
-    y: f32,
-    window_adapter: &crate::window::WindowAdapterRc,
-) {
-    slint_send_mouse_click(x, y, window_adapter);
-    slint_mock_elapsed_time(50);
-    slint_send_mouse_click(x, y, window_adapter);
 }
 
 /// Simulate a character input event (pressed or released).
@@ -102,8 +91,8 @@ pub extern "C" fn send_keyboard_string_sequence(
 /// implementation details for debug_log()
 #[doc(hidden)]
 pub fn debug_log_impl(args: core::fmt::Arguments) {
-    crate::platform::PLATFORM_INSTANCE.with(|p| match p.get() {
-        Some(platform) => platform.debug_log(args),
+    crate::context::GLOBAL_CONTEXT.with(|p| match p.get() {
+        Some(ctx) => ctx.0.platform.debug_log(args),
         None => default_debug_log(args),
     });
 }

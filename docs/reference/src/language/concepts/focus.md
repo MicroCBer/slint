@@ -1,10 +1,11 @@
 <!-- Copyright © SixtyFPS GmbH <info@slint.dev> ; SPDX-License-Identifier: MIT -->
+
 # Focus Handling
 
-Certain elements such as `TextInput` accept not only input from the mouse/finger but
+Certain elements such as `TextInput` accept input from the mouse/finger and
 also key events originating from (virtual) keyboards. In order for an item to receive
-these events, it must have the focus. This is visible through the `has-focus` (out) property.
-
+these events, it must have focus. This is visible through the `has-focus` (out) property.
+<!-- (out)? -->
 You can manually activate the focus on an element by calling `focus()`:
 
 ```slint
@@ -23,6 +24,29 @@ export component App inherits Window {
     }
 }
 ```
+
+Similarly, you can manually clear the focus on an element that's currently focused, by calling `clear-focus()`:
+
+```slint
+import { Button } from "std-widgets.slint";
+
+export component App inherits Window {
+    VerticalLayout {
+        alignment: start;
+        Button {
+            text: "press me";
+            clicked => { input.clear-focus(); }
+        }
+        input := TextInput {
+            text: "I am a text input field";
+        }
+    }
+}
+```
+
+After clearing the focus, keyboard input to the window is discarded until another element is explicitly
+focused. For example by calling `focus()`, an element acquiring focus when the user clicks on it, or when
+pressing tab and the first focusable element is found.
 
 If you have wrapped the `TextInput` in a component, then you can forward such a focus activation
 using the `forward-focus` property to refer to the element that should receive it:

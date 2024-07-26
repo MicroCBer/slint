@@ -60,7 +60,7 @@ export component HelloWorld inherits Window {
 }
 ```
 
-then you can use the following code in you `main` function to show the [`Window`](../slint/src/builtins/elements.html#window)
+then you can use the following code in you `main` function to show the [`Window`](../slint/src/language/builtins/elements#window)
 and change the text:
 
 ```cpp
@@ -83,7 +83,7 @@ the UI, read or write properties, and set callbacks. You can learn more about ho
 
 ## Tutorial
 
-For an in-depth walk-through, read our <a href="../tutorial/cpp">Slint Memory Game Tutorial</a>.
+For an in-depth walk-through, read our <a href="../quickstart/cpp">Slint Memory Game Tutorial</a>.
 It will guide you through the `.slint` mark-up language and the C++ API by building a simple memory
 game.
 

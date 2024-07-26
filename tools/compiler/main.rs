@@ -1,11 +1,11 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use clap::{Parser, ValueEnum};
 use i_slint_compiler::diagnostics::BuildDiagnostics;
 use i_slint_compiler::*;
 use itertools::Itertools;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum Embedding {
@@ -62,6 +62,10 @@ struct Cli {
     /// Translation domain
     #[arg(long = "translation-domain", action)]
     translation_domain: Option<String>,
+
+    /// C++ namespace
+    #[arg(long = "cpp-namespace", name = "C++ namespace")]
+    cpp_namespace: Option<String>,
 }
 
 fn main() -> std::io::Result<()> {
@@ -70,11 +74,22 @@ fn main() -> std::io::Result<()> {
     let mut diag = BuildDiagnostics::default();
     let syntax_node = parser::parse_file(&args.path, &mut diag);
     //println!("{:#?}", syntax_node);
-    if diag.has_error() {
+    if diag.has_errors() {
         diag.print();
         std::process::exit(-1);
     }
-    let mut compiler_config = CompilerConfiguration::new(args.format);
+
+    let mut format = args.format.clone();
+
+    if args.cpp_namespace.is_some() {
+        if !matches!(format, generator::OutputFormat::Cpp(..)) {
+            eprintln!("C++ namespace option was set. Output format will be C++.");
+        }
+        format =
+            generator::OutputFormat::Cpp(generator::cpp::Config { namespace: args.cpp_namespace });
+    }
+
+    let mut compiler_config = CompilerConfiguration::new(format.clone());
     compiler_config.translation_domain = args.translation_domain;
 
     // Override defaults from command line:
@@ -97,25 +112,31 @@ fn main() -> std::io::Result<()> {
         compiler_config.style = Some(style);
     }
     let syntax_node = syntax_node.expect("diags contained no compilation errors");
-    let (doc, diag) = spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
+    let (doc, diag, loader) =
+        spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
 
     let diag = diag.check_and_exit_on_error();
 
     if args.output == std::path::Path::new("-") {
-        generator::generate(args.format, &mut std::io::stdout(), &doc)?;
+        generator::generate(format, &mut std::io::stdout(), &doc, &loader.compiler_config)?;
     } else {
-        generator::generate(args.format, &mut std::fs::File::create(&args.output)?, &doc)?;
+        generator::generate(
+            format,
+            &mut BufWriter::new(std::fs::File::create(&args.output)?),
+            &doc,
+            &loader.compiler_config,
+        )?;
     }
 
     if let Some(depfile) = args.depfile {
-        let mut f = std::fs::File::create(depfile)?;
+        let mut f = BufWriter::new(std::fs::File::create(depfile)?);
         write!(f, "{}: {}", args.output.display(), args.path.display())?;
         for x in &diag.all_loaded_files {
             if x.is_absolute() {
                 write!(f, " {}", x.display())?;
             }
         }
-        for resource in doc.root_component.embedded_file_resources.borrow().keys() {
+        for resource in doc.embedded_file_resources.borrow().keys() {
             if !fileaccess::load_file(std::path::Path::new(resource))
                 .map_or(false, |f| f.is_builtin())
             {

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This module contains types that are public and re-exported in the slint-rs as well as the slint-interpreter crate as public API.
@@ -9,10 +9,13 @@ This module contains types that are public and re-exported in the slint-rs as we
 
 #[cfg(target_has_atomic = "ptr")]
 pub use crate::future::*;
+use crate::graphics::{Rgba8Pixel, SharedPixelBuffer};
 use crate::input::{KeyEventType, MouseEvent};
 use crate::item_tree::ItemTreeVTable;
 use crate::window::{WindowAdapter, WindowInner};
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
+#[cfg(not(feature = "std"))]
 use alloc::string::String;
 
 /// A position represented in the coordinate space of logical pixels. That is the space before applying
@@ -322,6 +325,70 @@ pub enum SetRenderingNotifierError {
     AlreadySet,
 }
 
+impl core::fmt::Display for SetRenderingNotifierError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Unsupported => {
+                f.write_str("The rendering backend does not support rendering notifiers.")
+            }
+            Self::AlreadySet => f.write_str(
+                "There is already a rendering notifier set, multiple notifiers are not supported.",
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for SetRenderingNotifierError {}
+
+#[cfg(feature = "raw-window-handle-06")]
+#[derive(Clone)]
+enum WindowHandleInner {
+    HandleByAdapter(alloc::rc::Rc<dyn WindowAdapter>),
+    HandleByRcRWH {
+        window_handle_provider: alloc::rc::Rc<dyn raw_window_handle_06::HasWindowHandle>,
+        display_handle_provider: alloc::rc::Rc<dyn raw_window_handle_06::HasDisplayHandle>,
+    },
+}
+
+/// This struct represents a persistent handle to a window and implements the
+/// [`raw_window_handle_06::HasWindowHandle`] and [`raw_window_handle_06::HasDisplayHandle`]
+/// traits for accessing exposing raw window and display handles.
+/// Obtain an instance of this by calling [`Window::window_handle()`].
+#[cfg(feature = "raw-window-handle-06")]
+#[derive(Clone)]
+pub struct WindowHandle {
+    inner: WindowHandleInner,
+}
+
+#[cfg(feature = "raw-window-handle-06")]
+impl raw_window_handle_06::HasWindowHandle for WindowHandle {
+    fn window_handle<'a>(
+        &'a self,
+    ) -> Result<raw_window_handle_06::WindowHandle<'a>, raw_window_handle_06::HandleError> {
+        match &self.inner {
+            WindowHandleInner::HandleByAdapter(adapter) => adapter.window_handle_06(),
+            WindowHandleInner::HandleByRcRWH { window_handle_provider, .. } => {
+                window_handle_provider.window_handle()
+            }
+        }
+    }
+}
+
+#[cfg(feature = "raw-window-handle-06")]
+impl raw_window_handle_06::HasDisplayHandle for WindowHandle {
+    fn display_handle<'a>(
+        &'a self,
+    ) -> Result<raw_window_handle_06::DisplayHandle<'a>, raw_window_handle_06::HandleError> {
+        match &self.inner {
+            WindowHandleInner::HandleByAdapter(adapter) => adapter.display_handle_06(),
+            WindowHandleInner::HandleByRcRWH { display_handle_provider, .. } => {
+                display_handle_provider.display_handle()
+            }
+        }
+    }
+}
+
 /// This type represents a window towards the windowing system, that's used to render the
 /// scene of a component. It provides API to control windowing system specific aspects such
 /// as the position on the screen.
@@ -446,6 +513,36 @@ impl Window {
         crate::window::WindowAdapter::set_size(&*self.0.window_adapter(), size);
     }
 
+    /// Returns if the window is currently fullscreen
+    pub fn is_fullscreen(&self) -> bool {
+        self.0.is_fullscreen()
+    }
+
+    /// Set or unset the window to display fullscreen.
+    pub fn set_fullscreen(&self, fullscreen: bool) {
+        self.0.set_fullscreen(fullscreen);
+    }
+
+    /// Returns if the window is currently maximized
+    pub fn is_maximized(&self) -> bool {
+        self.0.is_maximized()
+    }
+
+    /// Maximize or unmaximize the window.
+    pub fn set_maximized(&self, maximized: bool) {
+        self.0.set_maximized(maximized);
+    }
+
+    /// Returns if the window is currently minimized
+    pub fn is_minimized(&self) -> bool {
+        self.0.is_minimized()
+    }
+
+    /// Minimize or unminimze the window.
+    pub fn set_minimized(&self, minimized: bool) {
+        self.0.set_minimized(minimized);
+    }
+
     /// Dispatch a window event to the scene.
     ///
     /// Use this when you're implementing your own backend and want to forward user input events.
@@ -539,6 +636,35 @@ impl Window {
     pub fn is_visible(&self) -> bool {
         self.0.is_visible()
     }
+
+    /// Returns a struct that implements the raw window handle traits to access the windowing system specific window
+    /// and display handles. This function is only accessible if you enable the `raw-window-handle-06` crate feature.
+    #[cfg(feature = "raw-window-handle-06")]
+    pub fn window_handle(&self) -> WindowHandle {
+        let adapter = self.0.window_adapter();
+        if let Some((window_handle_provider, display_handle_provider)) =
+            adapter.internal(crate::InternalToken).and_then(|internal| {
+                internal.window_handle_06_rc().ok().zip(internal.display_handle_06_rc().ok())
+            })
+        {
+            WindowHandle {
+                inner: WindowHandleInner::HandleByRcRWH {
+                    window_handle_provider,
+                    display_handle_provider,
+                },
+            }
+        } else {
+            WindowHandle { inner: WindowHandleInner::HandleByAdapter(adapter) }
+        }
+    }
+
+    /// Takes a snapshot of the window contents and returns it as RGBA8 encoded pixel buffer.
+    ///
+    /// Note that this function may be slow to call. Reading from the framebuffer previously
+    /// rendered, too, may take a long time.
+    pub fn take_snapshot(&self) -> Result<SharedPixelBuffer<Rgba8Pixel>, PlatformError> {
+        self.0.window_adapter().renderer().take_snapshot()
+    }
 }
 
 pub use crate::SharedString;
@@ -552,7 +678,7 @@ pub use crate::SharedString;
 /// The following example of `.slint` markup defines a global singleton called `Palette`, exports
 /// it and modifies it from Rust code:
 /// ```rust
-/// # i_slint_backend_testing::init();
+/// # i_slint_backend_testing::init_no_event_loop();
 /// slint::slint!{
 /// export global Palette {
 ///     in property<color> foreground-color;
@@ -706,8 +832,15 @@ mod weak_handle {
         /// some other instance still holds a strong reference and the current thread
         /// is the thread that created this component.
         /// Otherwise, this function panics.
+        #[track_caller]
         pub fn unwrap(&self) -> T {
-            self.upgrade().unwrap()
+            #[cfg(feature = "std")]
+            if std::thread::current().id() != self.thread {
+                panic!(
+                    "Trying to upgrade a Weak from a different thread than the one it belongs to"
+                );
+            }
+            T::from_inner(self.inner.upgrade().expect("The Weak doesn't hold a valid component"))
         }
 
         /// A helper function to allow creation on `component_factory::Component` from
@@ -726,7 +859,7 @@ mod weak_handle {
         ///
         /// # Example
         /// ```rust
-        /// # i_slint_backend_testing::init();
+        /// # i_slint_backend_testing::init_no_event_loop();
         /// slint::slint! { export component MyApp inherits Window { in property <int> foo; /* ... */ } }
         /// let handle = MyApp::new().unwrap();
         /// let handle_weak = handle.as_weak();
@@ -782,7 +915,7 @@ pub use weak_handle::*;
 /// # Example
 /// ```rust
 /// slint::slint! { export component MyApp inherits Window { in property <int> foo; /* ... */ } }
-/// # i_slint_backend_testing::init();
+/// # i_slint_backend_testing::init_no_event_loop();
 /// let handle = MyApp::new().unwrap();
 /// let handle_weak = handle.as_weak();
 /// # return; // don't run the event loop in examples
@@ -836,6 +969,9 @@ impl core::fmt::Display for EventLoopError {
         }
     }
 }
+
+#[cfg(feature = "std")]
+impl std::error::Error for EventLoopError {}
 
 /// The platform encountered a fatal error.
 ///

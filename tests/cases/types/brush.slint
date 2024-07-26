@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 Test := Rectangle {
     // allow declaring brush properties and assigning colors
@@ -28,8 +28,10 @@ Test := Rectangle {
             && background != colo;
     }
 
-    property<bool> test: lighter == Colors.blue.brighter(50%) && r2_col == Colors.red.darker(50%) && conditional == r2.background && conditional != r2_col
-        && test_circle.test && seethru == color_brush.with_alpha(70%) && (#abc2).transparentize(-100%) == #abc4;
+    out property <bool> test_rgb: rgb(color_brush.red, color_brush.green, color_brush.blue) == color_brush;
+
+    out property<bool> test: lighter == Colors.blue.brighter(50%) && r2_col == Colors.red.darker(50%) && conditional == r2.background && conditional != r2_col
+        && test_circle.test && seethru == color_brush.with_alpha(70%) && (#abc2).transparentize(-100%) == #abc4 && test_rgb;
 }
 
 /*

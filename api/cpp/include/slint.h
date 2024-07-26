@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #pragma once
 
@@ -38,29 +38,17 @@
 /// \endrst
 namespace slint {
 
-// Bring opaque structure in scope
 namespace private_api {
-using cbindgen_private::ItemTreeVTable;
-using cbindgen_private::ItemVTable;
+// Bring opaque structure in scope
+using namespace cbindgen_private;
 using ItemTreeRef = vtable::VRef<private_api::ItemTreeVTable>;
 using IndexRange = cbindgen_private::IndexRange;
 using ItemRef = vtable::VRef<private_api::ItemVTable>;
 using ItemVisitorRefMut = vtable::VRefMut<cbindgen_private::ItemVisitorVTable>;
-using cbindgen_private::ItemTreeWeak;
-using cbindgen_private::ItemWeak;
-using cbindgen_private::TraversalOrder;
-}
-
-namespace private_api {
 using ItemTreeNode = cbindgen_private::ItemTreeNode;
 using ItemArrayEntry =
         vtable::VOffset<uint8_t, slint::cbindgen_private::ItemVTable, vtable::AllowPin>;
 using ItemArray = slint::cbindgen_private::Slice<ItemArrayEntry>;
-using cbindgen_private::KeyboardModifiers;
-using cbindgen_private::KeyEvent;
-using cbindgen_private::PointerEvent;
-using cbindgen_private::PointerScrollEvent;
-using cbindgen_private::TableColumn;
 
 constexpr inline ItemTreeNode make_item_node(uint32_t child_count, uint32_t child_index,
                                              uint32_t parent_index, uint32_t item_array_index,
@@ -125,6 +113,16 @@ inline vtable::Layout drop_in_place(ItemTreeRef item_tree)
 #        define SLINT_GET_ITEM_VTABLE(VTableName) (&slint::private_api::VTableName)
 #    endif
 #endif // !defined(DOXYGEN)
+
+inline std::optional<cbindgen_private::ItemRc>
+upgrade_item_weak(const cbindgen_private::ItemWeak &item_weak)
+{
+    if (auto item_tree_strong = item_weak.item_tree.lock()) {
+        return { { *item_tree_strong, item_weak.index } };
+    } else {
+        return std::nullopt;
+    }
+}
 
 } // namespace private_api
 
@@ -347,18 +345,12 @@ public:
 
     /// \private
     /// Internal function called by the view to register itself
-    void attach_peer(private_api::ModelPeer p)
-    {
-        peers.push_back(std::move(p));
-    }
+    void attach_peer(private_api::ModelPeer p) { peers.push_back(std::move(p)); }
 
     /// \private
     /// Internal function called from within bindings to register with the currently
     /// evaluating dependency and get notified when this model's row count changes.
-    void track_row_count_changes() const
-    {
-        model_row_count_dirty_property.get();
-    }
+    void track_row_count_changes() const { model_row_count_dirty_property.get(); }
 
     /// \private
     /// Internal function called from within bindings to register with the currently
@@ -539,6 +531,22 @@ public:
         data.insert(data.begin() + index, value);
         this->row_added(index, 1);
     }
+
+    /// Erases all rows from the VectorModel.
+    void clear()
+    {
+        if (!data.empty()) {
+            data.clear();
+            this->reset();
+        }
+    }
+
+    /// Replaces the underlying VectorModel's vector with \a array.
+    void set_vector(std::vector<ModelData> array)
+    {
+        data = std::move(array);
+        this->reset();
+    }
 };
 
 template<typename ModelData>
@@ -553,11 +561,15 @@ struct FilterModelInner : private_api::ModelChangeListener
                      slint::FilterModel<ModelData> &target_model)
         : source_model(source_model), filter_fn(filter_fn), target_model(target_model)
     {
-        update_mapping();
     }
 
     void row_added(size_t index, size_t count) override
     {
+        if (filtered_rows_dirty) {
+            reset();
+            return;
+        }
+
         if (count == 0) {
             return;
         }
@@ -588,6 +600,11 @@ struct FilterModelInner : private_api::ModelChangeListener
     }
     void row_changed(size_t index) override
     {
+        if (filtered_rows_dirty) {
+            reset();
+            return;
+        }
+
         auto existing_row = std::lower_bound(accepted_rows.begin(), accepted_rows.end(), index);
         auto existing_row_index = std::distance(accepted_rows.begin(), existing_row);
         bool is_contained = existing_row != accepted_rows.end() && *existing_row == index;
@@ -605,6 +622,11 @@ struct FilterModelInner : private_api::ModelChangeListener
     }
     void row_removed(size_t index, size_t count) override
     {
+        if (filtered_rows_dirty) {
+            reset();
+            return;
+        }
+
         auto mapped_row_start = std::lower_bound(accepted_rows.begin(), accepted_rows.end(), index);
         auto mapped_row_end =
                 std::lower_bound(accepted_rows.begin(), accepted_rows.end(), index + count);
@@ -627,12 +649,17 @@ struct FilterModelInner : private_api::ModelChangeListener
     }
     void reset() override
     {
+        filtered_rows_dirty = true;
         update_mapping();
-        target_model.reset();
+        target_model.Model<ModelData>::reset();
     }
 
     void update_mapping()
     {
+        if (!filtered_rows_dirty) {
+            return;
+        }
+
         accepted_rows.clear();
         for (size_t i = 0, count = source_model->row_count(); i < count; ++i) {
             if (auto data = source_model->row_data(i)) {
@@ -641,8 +668,11 @@ struct FilterModelInner : private_api::ModelChangeListener
                 }
             }
         }
+
+        filtered_rows_dirty = false;
     }
 
+    bool filtered_rows_dirty = true;
     std::shared_ptr<slint::Model<ModelData>> source_model;
     std::function<bool(const ModelData &)> filter_fn;
     std::vector<size_t> accepted_rows;
@@ -665,15 +695,20 @@ public:
     FilterModel(std::shared_ptr<Model<ModelData>> source_model,
                 std::function<bool(const ModelData &)> filter_fn)
         : inner(std::make_shared<private_api::FilterModelInner<ModelData>>(
-                std::move(source_model), std::move(filter_fn), *this))
+                  std::move(source_model), std::move(filter_fn), *this))
     {
         inner->source_model->attach_peer(inner);
     }
 
-    size_t row_count() const override { return inner->accepted_rows.size(); }
+    size_t row_count() const override
+    {
+        inner->update_mapping();
+        return inner->accepted_rows.size();
+    }
 
     std::optional<ModelData> row_data(size_t i) const override
     {
+        inner->update_mapping();
         if (i >= inner->accepted_rows.size())
             return {};
         return inner->source_model->row_data(inner->accepted_rows[i]);
@@ -681,6 +716,7 @@ public:
 
     void set_row_data(size_t i, const ModelData &value) override
     {
+        inner->update_mapping();
         inner->source_model->set_row_data(inner->accepted_rows[i], value);
     }
 
@@ -690,7 +726,11 @@ public:
 
     /// Given the \a filtered_row index, this function returns the corresponding row index in the
     /// source model.
-    int unfiltered_row(int filtered_row) const { return inner->accepted_rows[filtered_row]; }
+    int unfiltered_row(int filtered_row) const
+    {
+        inner->update_mapping();
+        return inner->accepted_rows[filtered_row];
+    }
 
     /// Returns the source model of this filter model.
     std::shared_ptr<Model<ModelData>> source_model() const { return inner->source_model; }
@@ -717,7 +757,7 @@ struct MapModelInner : private_api::ModelChangeListener
     {
         target_model.row_removed(index, count);
     }
-    void reset() override { target_model.reset(); }
+    void reset() override { target_model.Model<MappedModelData>::reset(); }
 
     slint::MapModel<SourceModelData, MappedModelData> &target_model;
 };
@@ -743,7 +783,7 @@ public:
     MapModel(std::shared_ptr<Model<SourceModelData>> source_model,
              std::function<MappedModelData(const SourceModelData &)> map_fn)
         : inner(std::make_shared<private_api::MapModelInner<SourceModelData, MappedModelData>>(
-                *this)),
+                  *this)),
           model(source_model),
           map_fn(map_fn)
     {
@@ -762,6 +802,10 @@ public:
 
     /// Returns the source model of this filter model.
     std::shared_ptr<Model<SourceModelData>> source_model() const { return model; }
+
+    /// Re-applies the model's mapping function on each row of the source model. Use this if state
+    /// external to the mapping function has changed.
+    void reset() { inner->reset(); }
 
 private:
     std::shared_ptr<private_api::MapModelInner<SourceModelData, MappedModelData>> inner;
@@ -870,7 +914,7 @@ struct SortModelInner : private_api::ModelChangeListener
     void reset() override
     {
         sorted_rows_dirty = true;
-        target_model.reset();
+        target_model.Model<ModelData>::reset();
     }
 
     void ensure_sorted()
@@ -980,14 +1024,10 @@ struct ReverseModelInner : private_api::ModelChangeListener
 
     void row_removed(size_t first_removed_row, size_t count) override
     {
-        auto row_count = source_model->row_count();
-        auto old_row_count = row_count + count;
-        auto row = old_row_count - first_removed_row - 1;
-
-        target_model.row_removed(row, count);
+        target_model.row_removed(source_model->row_count() - first_removed_row, count);
     }
 
-    void reset() override { source_model.reset(); }
+    void reset() override { target_model.reset(); }
 
     std::shared_ptr<slint::Model<ModelData>> source_model;
     slint::ReverseModel<ModelData> &target_model;
@@ -1222,6 +1262,24 @@ inline SharedString translate(const SharedString &original, const SharedString &
 
 } // namespace private_api
 
+#ifdef SLINT_FEATURE_GETTEXT
+/// Forces all the strings that are translated with `@tr(...)` to be re-evaluated.
+/// This is useful if the language is changed at runtime.
+/// The function is only available when Slint is compiled with `SLINT_FEATURE_GETTEXT`.
+///
+/// Example
+/// ```cpp
+///     my_ui->global<LanguageSettings>().on_french_selected([] {
+///        setenv("LANGUAGE", langs[l], true);
+///        slint::update_all_translations();
+///    });
+/// ```
+inline void update_all_translations()
+{
+    cbindgen_private::slint_translations_mark_dirty();
+}
+#endif
+
 #if !defined(DOXYGEN)
 cbindgen_private::Flickable::Flickable()
 {
@@ -1241,6 +1299,16 @@ cbindgen_private::NativeStyleMetrics::~NativeStyleMetrics()
 {
     slint_native_style_metrics_deinit(this);
 }
+
+cbindgen_private::NativePalette::NativePalette(void *)
+{
+    slint_native_palette_init(this);
+}
+
+cbindgen_private::NativePalette::~NativePalette()
+{
+    slint_native_palette_deinit(this);
+}
 #endif // !defined(DOXYGEN)
 
 namespace private_api {
@@ -1251,13 +1319,29 @@ struct [[deprecated]] VersionCheckHelper
 };
 }
 
+/// Enum for the event loop mode parameter of the slint::run_event_loop() function.
+/// It is used to determine when the event loop quits.
+enum class EventLoopMode {
+    /// The event loop will quit when the last window is closed
+    /// or when slint::quit_event_loop() is called.
+    QuitOnLastWindowClosed,
+
+    /// The event loop will keep running until slint::quit_event_loop() is called,
+    /// even when all windows are closed.
+    RunUntilQuit
+};
+
 /// Enters the main event loop. This is necessary in order to receive
 /// events from the windowing system in order to render to the screen
 /// and react to user input.
-inline void run_event_loop()
+///
+/// The mode parameter determines the behavior of the event loop when all windows are closed.
+/// By default, it is set to QuitOnLastWindowClose, which means the event loop will
+/// quit when the last window is closed.
+inline void run_event_loop(EventLoopMode mode = EventLoopMode::QuitOnLastWindowClosed)
 {
     private_api::assert_main_thread();
-    cbindgen_private::slint_run_event_loop();
+    cbindgen_private::slint_run_event_loop(mode == EventLoopMode::QuitOnLastWindowClosed);
 }
 
 /// Schedules the main event loop for termination. This function is meant
@@ -1314,7 +1398,7 @@ void invoke_from_event_loop(Functor f)
             [](void *data) { delete reinterpret_cast<Functor *>(data); });
 }
 
-#ifndef SLINT_FEATURE_FREESTANDING
+#if !defined(SLINT_FEATURE_FREESTANDING) || defined(DOXYGEN)
 
 /// Blocking version of invoke_from_event_loop()
 ///

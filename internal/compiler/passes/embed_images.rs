@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use crate::diagnostics::BuildDiagnostics;
 use crate::embedded_resources::*;
@@ -15,23 +15,21 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 pub async fn embed_images(
-    component: &Rc<Component>,
+    doc: &Document,
     embed_files: EmbedResourcesKind,
     scale_factor: f64,
     resource_url_mapper: &Option<Rc<dyn Fn(&str) -> Pin<Box<dyn Future<Output = Option<String>>>>>>,
     diag: &mut BuildDiagnostics,
 ) {
-    let global_embedded_resources = &component.embedded_file_resources;
+    if embed_files == EmbedResourcesKind::Nothing && resource_url_mapper.is_none() {
+        return;
+    }
 
-    let all_components = component
-        .used_types
-        .borrow()
-        .sub_components
-        .iter()
-        .chain(component.used_types.borrow().globals.iter())
-        .chain(std::iter::once(component))
-        .cloned()
-        .collect::<Vec<_>>();
+    let global_embedded_resources = &doc.embedded_file_resources;
+
+    let mut all_components = Vec::new();
+    doc.visit_all_used_components(|c| all_components.push(c.clone()));
+    let all_components = all_components;
 
     let mapped_urls = {
         let mut urls = HashMap::<String, Option<String>>::new();
@@ -46,7 +44,7 @@ pub async fn embed_images(
 
             // Map URLs (async -- well, not really):
             for i in urls.iter_mut() {
-                *i.1 = (*mapper)(&i.0).await;
+                *i.1 = (*mapper)(i.0).await;
             }
         }
 
@@ -86,28 +84,25 @@ fn embed_images_from_expression(
     scale_factor: f64,
     diag: &mut BuildDiagnostics,
 ) {
-    if let Expression::ImageReference { ref mut resource_ref, source_location } = e {
-        match resource_ref {
-            ImageReference::AbsolutePath(path) => {
-                // used mapped path:
-                let mapped_path =
-                    urls.get(path).unwrap_or(&Some(path.clone())).clone().unwrap_or(path.clone());
-                *path = mapped_path;
-
-                if embed_files != EmbedResourcesKind::OnlyBuiltinResources
-                    || path.starts_with("builtin:/")
-                {
-                    *resource_ref = embed_image(
-                        global_embedded_resources,
-                        embed_files,
-                        &path,
-                        scale_factor,
-                        diag,
-                        source_location,
-                    );
-                }
+    if let Expression::ImageReference { ref mut resource_ref, source_location, nine_slice: _ } = e {
+        if let ImageReference::AbsolutePath(path) = resource_ref {
+            // used mapped path:
+            let mapped_path =
+                urls.get(path).unwrap_or(&Some(path.clone())).clone().unwrap_or(path.clone());
+            *path = mapped_path;
+            if embed_files != EmbedResourcesKind::Nothing
+                && (embed_files != EmbedResourcesKind::OnlyBuiltinResources
+                    || path.starts_with("builtin:/"))
+            {
+                *resource_ref = embed_image(
+                    global_embedded_resources,
+                    embed_files,
+                    path,
+                    scale_factor,
+                    diag,
+                    source_location,
+                );
             }
-            _ => {}
         }
     };
 
@@ -362,27 +357,28 @@ fn load_image(
 ) -> image::ImageResult<(image::RgbaImage, SourceFormat, Size)> {
     use resvg::{tiny_skia, usvg};
     use std::ffi::OsStr;
-    use usvg::TreeParsing;
     if file.canon_path.extension() == Some(OsStr::new("svg"))
         || file.canon_path.extension() == Some(OsStr::new("svgz"))
     {
-        let options = usvg::Options::default();
-        let tree = match file.builtin_contents {
-            Some(data) => usvg::Tree::from_data(data, &options),
-            None => usvg::Tree::from_data(
-                std::fs::read(file.canon_path).map_err(image::ImageError::IoError)?.as_slice(),
-                &options,
-            ),
-        }
-        .map_err(|e| {
-            image::ImageError::Decoding(image::error::DecodingError::new(
-                image::error::ImageFormatHint::Name("svg".into()),
-                e,
-            ))
+        let tree = i_slint_common::sharedfontdb::FONT_DB.with_borrow(|db| {
+            let option = usvg::Options { fontdb: (*db).clone(), ..Default::default() };
+            match file.builtin_contents {
+                Some(data) => usvg::Tree::from_data(data, &option),
+                None => usvg::Tree::from_data(
+                    std::fs::read(&file.canon_path).map_err(image::ImageError::IoError)?.as_slice(),
+                    &option,
+                ),
+            }
+            .map_err(|e| {
+                image::ImageError::Decoding(image::error::DecodingError::new(
+                    image::error::ImageFormatHint::Name("svg".into()),
+                    e,
+                ))
+            })
         })?;
         let scale_factor = scale_factor as f32;
         // TODO: ideally we should find the size used for that `Image`
-        let original_size = tree.size;
+        let original_size = tree.size();
         let width = original_size.width() * scale_factor;
         let height = original_size.height() * scale_factor;
 
@@ -395,8 +391,8 @@ fn load_image(
         let mut skia_buffer =
             tiny_skia::PixmapMut::from_bytes(buffer.as_mut_slice(), width as u32, height as u32)
                 .ok_or_else(size_error)?;
-        let rtree = resvg::Tree::from_usvg(&tree);
-        rtree.render(
+        resvg::render(
+            &tree,
             tiny_skia::Transform::from_scale(scale_factor as _, scale_factor as _),
             &mut skia_buffer,
         );

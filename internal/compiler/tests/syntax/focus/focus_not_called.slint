@@ -1,6 +1,26 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+
+component BadOne {
+    function focus() {
+//           ^error{Cannot override 'focus'}
+    }
+
+    TextInput {
+        function focus() {
+//               ^error{Cannot override 'focus'}
+        }
+    }
+}
+
+component SecondBadOne {
+    forward-focus: ti;
+    function focus() {
+//           ^error{Cannot override 'focus'}        
+    }
+    ti := TextInput {}
+}
 
 export X := Rectangle {
     edit := TextInput { }
@@ -16,4 +36,7 @@ export X := Rectangle {
 //     ^error{Cannot convert function\(element ref\) -> void to length}
 //     ^^error{'edit.focus' must be called. Did you forgot the '\(\)'\?}
 //          ^^^warning{Call of impure function}
+
+    BadOne {}
+    SecondBadOne {}
 }

@@ -1,12 +1,12 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
-import { CupertinoPalette, CupertinoFontSettings, Icons } from "styling.slint";
+import { CupertinoPalette, CupertinoFontSettings, Icons, CupertinoSizeSettings } from "styling.slint";
 
 export component FocusBorder inherits Rectangle {
     in property <bool> has-focus;
 
-    background: CupertinoPalette.accent-tertiary;
+    background: CupertinoPalette.tertiary-accent-background;
     opacity: 0;
 
     animate opacity { duration: 150ms; }
@@ -55,18 +55,18 @@ export component ListItem {
     in property <length> pressed-y;
 
     min-width: i-layout.min-width;
-    min-height: max(22px, i-layout.min-height);
+    min-height: max(CupertinoSizeSettings.item-height, i-layout.min-height);
     vertical-stretch: 0;
     horizontal-stretch: 1;
 
     states [
         has-focus when root.has-focus : {
-            i-background.background: CupertinoPalette.accent-tertiary;
+            i-background.background: CupertinoPalette.tertiary-accent-background;
         }
         hover when root.has-hover : {
-            i-background.background: CupertinoPalette.accent;
-            i-text.color: CupertinoPalette.on-surface;
-            i-icon.colorize: CupertinoPalette.on-surface;
+            i-background.background: CupertinoPalette.accent-background;
+            i-text.color: CupertinoPalette.control-foreground;
+            i-icon.colorize: CupertinoPalette.control-foreground;
         }
     ]
 

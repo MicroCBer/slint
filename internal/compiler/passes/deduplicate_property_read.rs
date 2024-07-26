@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Do not read twice the same property, store in a local variable instead
 
@@ -119,7 +119,7 @@ fn collect_unconditional_read_count(expr: &Expression, result: &DedupPropState) 
         }
         //Expression::RepeaterIndexReference { element } => {}
         //Expression::RepeaterModelReference { element } => {}
-        Expression::BinaryExpression { lhs, rhs: _, op } if matches!(op, '|' | '&') => {
+        Expression::BinaryExpression { lhs, rhs: _, op: '|' | '&' } => {
             lhs.visit(|sub| collect_unconditional_read_count(sub, result))
         }
         Expression::Condition { condition, .. } => {
@@ -137,7 +137,7 @@ fn process_conditional_expressions(expr: &mut Expression, state: &DedupPropState
         return;
     }
     match expr {
-        Expression::BinaryExpression { lhs, rhs, op } if matches!(op, '|' | '&') => {
+        Expression::BinaryExpression { lhs, rhs, op: '|' | '&' } => {
             lhs.visit_mut(|sub| process_conditional_expressions(sub, state));
             process_expression(rhs, state);
         }
@@ -161,7 +161,7 @@ fn do_replacements(expr: &mut Expression, state: &DedupPropState) {
                 *expr = Expression::ReadLocalVariable { name, ty };
             }
         }
-        Expression::BinaryExpression { lhs, rhs: _, op } if matches!(op, '|' | '&') => {
+        Expression::BinaryExpression { lhs, rhs: _, op: '|' | '&' } => {
             lhs.visit_mut(|sub| do_replacements(sub, state));
         }
         Expression::Condition { condition, .. } => {

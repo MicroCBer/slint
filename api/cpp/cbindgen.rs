@@ -1,22 +1,25 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use anyhow::Context;
-use std::io::Write;
-use std::iter::Extend;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 // cSpell: ignore compat constexpr corelib deps sharedvector pathdata
 
 fn enums(path: &Path) -> anyhow::Result<()> {
-    let mut enums_priv = std::fs::File::create(path.join("slint_enums_internal.h"))
-        .context("Error creating slint_enums_internal.h file")?;
+    let mut enums_priv = BufWriter::new(
+        std::fs::File::create(path.join("slint_enums_internal.h"))
+            .context("Error creating slint_enums_internal.h file")?,
+    );
     writeln!(enums_priv, "#pragma once")?;
     writeln!(enums_priv, "// This file is auto-generated from {}", file!())?;
     writeln!(enums_priv, "#include \"slint_enums.h\"")?;
     writeln!(enums_priv, "namespace slint::cbindgen_private {{")?;
-    let mut enums_pub = std::fs::File::create(path.join("slint_enums.h"))
-        .context("Error creating slint_enums.h file")?;
+    let mut enums_pub = BufWriter::new(
+        std::fs::File::create(path.join("slint_enums.h"))
+            .context("Error creating slint_enums.h file")?,
+    );
     writeln!(enums_pub, "#pragma once")?;
     writeln!(enums_pub, "// This file is auto-generated from {}", file!())?;
     writeln!(enums_pub, "namespace slint {{")?;
@@ -25,14 +28,30 @@ fn enums(path: &Path) -> anyhow::Result<()> {
             writeln!(enums_priv, "using slint::PointerEventButton;")?;
             &mut enums_pub
         }};
+        (AccessibleRole) => {{
+            writeln!(enums_priv, "using slint::testing::AccessibleRole;")?;
+            &mut enums_pub
+        }};
         ($_:ident) => {
             &mut enums_priv
+        };
+    }
+    macro_rules! enum_sub_namespace {
+        (AccessibleRole) => {{
+            Some("testing")
+        }};
+        ($_:ident) => {
+            None
         };
     }
     macro_rules! print_enums {
          ($( $(#[doc = $enum_doc:literal])* $(#[non_exhaustive])? enum $Name:ident { $( $(#[doc = $value_doc:literal])* $Value:ident,)* })*) => {
              $(
                 let file = enum_file!($Name);
+                let namespace: Option<&'static str> = enum_sub_namespace!($Name);
+                if let Some(ns) = namespace {
+                    writeln!(file, "namespace {} {{", ns)?;
+                }
                 $(writeln!(file, "///{}", $enum_doc)?;)*
                 writeln!(file, "enum class {} {{", stringify!($Name))?;
                 $(
@@ -40,6 +59,9 @@ fn enums(path: &Path) -> anyhow::Result<()> {
                     writeln!(file, "    {},", stringify!($Value).trim_start_matches("r#"))?;
                 )*
                 writeln!(file, "}};")?;
+                if namespace.is_some() {
+                    writeln!(file, "}}")?;
+                }
              )*
          }
     }
@@ -81,14 +103,18 @@ namespace slint::platform::key_codes {{
 }
 
 fn builtin_structs(path: &Path) -> anyhow::Result<()> {
-    let mut structs_pub = std::fs::File::create(path.join("slint_builtin_structs.h"))
-        .context("Error creating slint_builtin_structs.h file")?;
+    let mut structs_pub = BufWriter::new(
+        std::fs::File::create(path.join("slint_builtin_structs.h"))
+            .context("Error creating slint_builtin_structs.h file")?,
+    );
     writeln!(structs_pub, "#pragma once")?;
     writeln!(structs_pub, "// This file is auto-generated from {}", file!())?;
     writeln!(structs_pub, "namespace slint {{")?;
 
-    let mut structs_priv = std::fs::File::create(path.join("slint_builtin_structs_internal.h"))
-        .context("Error creating slint_builtin_structs_internal.h file")?;
+    let mut structs_priv = BufWriter::new(
+        std::fs::File::create(path.join("slint_builtin_structs_internal.h"))
+            .context("Error creating slint_builtin_structs_internal.h file")?,
+    );
     writeln!(structs_priv, "#pragma once")?;
     writeln!(structs_priv, "// This file is auto-generated from {}", file!())?;
     writeln!(structs_priv, "#include \"slint_builtin_structs.h\"")?;
@@ -134,7 +160,8 @@ fn builtin_structs(path: &Path) -> anyhow::Result<()> {
                 )*
                 $(
                     $(writeln!(file, "    ///{}", $pri_doc)?;)*
-                    let pri_type = match stringify!($pri_type) {
+                    let pri_type = stringify!($pri_type).replace(' ', "");
+                    let pri_type = match pri_type.as_str() {
                         "usize" => "uintptr_t",
                         "crate::animations::Instant" => "uint64_t",
                         // This shouldn't be accessed by the C++ anyway, just need to have the same ABI in a struct
@@ -174,6 +201,7 @@ fn ensure_cargo_rerun_for_crate(
 
 fn default_config() -> cbindgen::Config {
     let mut config = cbindgen::Config::default();
+    config.macro_expansion.bitflags = true;
     config.pragma_once = true;
     config.include_version = true;
     config.namespaces = Some(vec!["slint".into(), "cbindgen_private".into()]);
@@ -192,6 +220,7 @@ fn default_config() -> cbindgen::Config {
             ("PointerScrollEventArg".into(), "PointerScrollEvent".into()),
             ("PointArg".into(), "slint::LogicalPosition".into()),
             ("FloatArg".into(), "float".into()),
+            ("IntArg".into(), "int".into()),
             ("Coord".into(), "float".into()),
         ]
         .iter()
@@ -207,6 +236,8 @@ fn default_config() -> cbindgen::Config {
     .iter()
     .cloned()
     .collect();
+    config.structure.associated_constants_in_body = true;
+    config.constant.allow_constexpr = true;
     config
 }
 
@@ -244,13 +275,15 @@ fn gen_corelib(
     let items = [
         "Empty",
         "Rectangle",
+        "BasicBorderRectangle",
         "BorderRectangle",
         "ImageItem",
         "ClippedImage",
         "TouchArea",
         "FocusScope",
         "Flickable",
-        "Text",
+        "SimpleText",
+        "ComplexText",
         "Path",
         "WindowItem",
         "TextInput",
@@ -285,6 +318,7 @@ fn gen_corelib(
         "Rect",
         "SortOrder",
         "BitmapFont",
+        "PhysicalRegion",
     ]
     .iter()
     .chain(items.iter())
@@ -339,12 +373,15 @@ fn gen_corelib(
         "slint_color_transparentize",
         "slint_color_mix",
         "slint_color_with_alpha",
+        "slint_color_to_hsva",
+        "slint_color_from_hsva",
         "slint_image_size",
         "slint_image_path",
         "slint_image_load_from_path",
         "slint_image_load_from_embedded_data",
         "slint_image_from_embedded_textures",
         "slint_image_compare_equal",
+        "slint_image_set_nine_slice_edges",
         "slint_timer_start",
         "slint_timer_singleshot",
         "slint_timer_destroy",
@@ -454,6 +491,7 @@ fn gen_corelib(
                 "slint_image_load_from_embedded_data",
                 "slint_image_from_embedded_textures",
                 "slint_image_compare_equal",
+                "slint_image_set_nine_slice_edges",
                 "SharedPixelBuffer",
                 "SharedImageBuffer",
                 "StaticTextures",
@@ -461,13 +499,15 @@ fn gen_corelib(
             ],
             vec!["Color"],
             "slint_image_internal.h",
-            "namespace slint::cbindgen_private { struct ParsedSVG{}; struct HTMLImage{}; using namespace vtable; }",
+            "namespace slint::cbindgen_private { struct ParsedSVG{}; struct HTMLImage{}; using namespace vtable; namespace types{ struct NineSliceImage{}; } }",
         ),
         (
             vec!["Color", "slint_color_brighter", "slint_color_darker",
             "slint_color_transparentize",
             "slint_color_mix",
-            "slint_color_with_alpha",],
+            "slint_color_with_alpha",
+            "slint_color_to_hsva",
+            "slint_color_from_hsva",],
             vec![],
             "slint_color_internal.h",
             "",
@@ -513,10 +553,17 @@ fn gen_corelib(
             "slint_windowrc_size",
             "slint_windowrc_set_logical_size",
             "slint_windowrc_set_physical_size",
-            "slint_windowrc_dark_color_scheme",
+            "slint_windowrc_color_scheme",
+            "slint_windowrc_default_font_size",
             "slint_windowrc_dispatch_pointer_event",
             "slint_windowrc_dispatch_key_event",
             "slint_windowrc_dispatch_event",
+            "slint_windowrc_set_fullscreen",
+            "slint_windowrc_set_minimized",
+            "slint_windowrc_set_maximized",
+            "slint_windowrc_is_fullscreen",
+            "slint_windowrc_is_minimized",
+            "slint_windowrc_is_maximized",
             "slint_new_path_elements",
             "slint_new_path_events",
             "slint_color_brighter",
@@ -524,10 +571,13 @@ fn gen_corelib(
             "slint_color_transparentize",
             "slint_color_mix",
             "slint_color_with_alpha",
+            "slint_color_to_hsva",
+            "slint_color_from_hsva",
             "slint_image_size",
             "slint_image_path",
             "slint_image_load_from_path",
             "slint_image_load_from_embedded_data",
+            "slint_image_set_nine_slice_edges",
             "slint_image_from_embedded_textures",
             "slint_image_compare_equal",
         ]
@@ -730,15 +780,21 @@ fn gen_backend_qt(
         "NativeTabWidget",
         "NativeTab",
         "NativeStyleMetrics",
+        "NativePalette",
     ];
 
     config.export.include = items.iter().map(|x| x.to_string()).collect();
-    config.export.exclude = vec!["FloatArg".into()];
+    config.export.exclude = vec!["FloatArg".into(), "IntArg".into()];
 
     config.export.body.insert(
         "NativeStyleMetrics".to_owned(),
         "    inline explicit NativeStyleMetrics(void* = nullptr); inline ~NativeStyleMetrics();"
             .to_owned(),
+    );
+
+    config.export.body.insert(
+        "NativePalette".to_owned(),
+        "    inline explicit NativePalette(void* = nullptr); inline ~NativePalette();".to_owned(),
     );
 
     let mut crate_dir = root_dir.to_owned();
@@ -770,6 +826,29 @@ fn gen_backend_qt(
         .generate()
         .context("Unable to generate bindings for slint_qt_internal.h")?
         .write_to_file(include_dir.join("slint_qt_internal.h"));
+
+    Ok(())
+}
+
+fn gen_testing(
+    root_dir: &Path,
+    include_dir: &Path,
+    dependencies: &mut Vec<PathBuf>,
+) -> anyhow::Result<()> {
+    let config = default_config();
+
+    let mut crate_dir = root_dir.to_owned();
+    crate_dir.extend(["internal", "backends", "testing"].iter());
+
+    ensure_cargo_rerun_for_crate(&crate_dir, dependencies)?;
+
+    cbindgen::Builder::new()
+        .with_config(config)
+        .with_crate(crate_dir)
+        .with_include("slint_testing_internal.h")
+        .generate()
+        .context("Unable to generate bindings for slint_testing_internal.h")?
+        .write_to_file(include_dir.join("slint_testing_internal.h"));
 
     Ok(())
 }
@@ -883,7 +962,7 @@ macro_rules! declare_features {
                 let mut defines = String::new();
                 $(
                     if self.$f {
-                        defines = format!("{defines}#define SLINT_FEATURE_{}\n", stringify!($f).to_ascii_uppercase());
+                        defines = format!("{defines}///This macro is defined when Slint was configured with the SLINT_FEATURE_{0} flag enabled\n#define SLINT_FEATURE_{0}\n", stringify!($f).to_ascii_uppercase());
                     };
                 )*
                 defines
@@ -902,7 +981,26 @@ macro_rules! declare_features {
     };
 }
 
-declare_features! {interpreter backend_qt freestanding renderer_software renderer_skia experimental}
+declare_features! {
+    interpreter
+    testing
+    backend_qt
+    backend_winit
+    backend_winit_x11
+    backend_winit_wayland
+    backend_linuxkms
+    backend_linuxkms_noseat
+    renderer_femtovg
+    renderer_skia
+    renderer_skia_opengl
+    renderer_skia_vulkan
+    renderer_software
+    gettext
+    accessibility
+    system_testing
+    freestanding
+    experimental
+}
 
 /// Generate the headers.
 /// `root_dir` is the root directory of the slint git repo
@@ -922,6 +1020,9 @@ pub fn gen_all(
     gen_corelib(root_dir, include_dir, &mut deps, enabled_features)?;
     gen_backend_qt(root_dir, include_dir, &mut deps)?;
     gen_platform(root_dir, include_dir, &mut deps)?;
+    if enabled_features.testing {
+        gen_testing(root_dir, include_dir, &mut deps)?;
+    }
     if enabled_features.interpreter {
         gen_interpreter(root_dir, include_dir, &mut deps)?;
     }

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Pass that lowers synthetic properties such as `opacity` and `layer` properties to their corresponding elements.
 //! For example `f := Foo { opacity: <some float>; }` is mapped to `Opacity { opacity <=> f.opacity; f := Foo { ... } }`
@@ -52,7 +52,7 @@ pub(crate) fn lower_property_to_element(
                         .property_analysis
                         .borrow()
                         .get(property_name)
-                        .map_or(false, |a| a.is_set))
+                        .map_or(false, |a| a.is_set || a.is_linked))
         };
 
         for mut child in old_children {

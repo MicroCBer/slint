@@ -1,9 +1,11 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use crate::parser::TextSize;
 
 /// Span represent an error location within a file.
 ///
@@ -60,6 +62,8 @@ pub trait Spanned {
     }
 }
 
+pub type SourceFileVersion = Option<i32>;
+
 #[derive(Default)]
 pub struct SourceFileInner {
     path: PathBuf,
@@ -69,17 +73,21 @@ pub struct SourceFileInner {
 
     /// The offset of each linebreak
     line_offsets: once_cell::unsync::OnceCell<Vec<usize>>,
+
+    /// The version of the source file. `None` means "as seen on disk"
+    version: SourceFileVersion,
 }
 
 impl std::fmt::Debug for SourceFileInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.path)
+        let v = if let Some(v) = self.version { format!("@{v}") } else { String::new() };
+        write!(f, "{:?}{v}", self.path)
     }
 }
 
 impl SourceFileInner {
-    pub fn new(path: PathBuf, source: String) -> Self {
-        Self { path, source: Some(source), line_offsets: Default::default() }
+    pub fn new(path: PathBuf, source: String, version: SourceFileVersion) -> Self {
+        Self { path, source: Some(source), line_offsets: Default::default(), version }
     }
 
     pub fn path(&self) -> &Path {
@@ -104,6 +112,15 @@ impl SourceFileInner {
             },
             |line| (line + 2, 1),
         )
+    }
+
+    pub fn text_size_to_file_line_column(
+        &self,
+        size: TextSize,
+    ) -> (String, usize, usize, usize, usize) {
+        let file_name = self.path().to_string_lossy().to_string();
+        let (start_line, start_column) = self.line_column(size.into());
+        (file_name, start_line, start_column, start_line, start_column)
     }
 
     /// Returns the offset that corresponds to the line/column
@@ -136,6 +153,10 @@ impl SourceFileInner {
 
     pub fn source(&self) -> Option<&str> {
         self.source.as_deref()
+    }
+
+    pub fn version(&self) -> SourceFileVersion {
+        self.version
     }
 }
 
@@ -281,6 +302,9 @@ impl std::fmt::Display for Diagnostic {
 pub struct BuildDiagnostics {
     inner: Vec<Diagnostic>,
 
+    /// When false, throw error for experimental features
+    pub enable_experimental: bool,
+
     /// This is the list of all loaded files (with or without diagnostic)
     /// does not include the main file.
     /// FIXME: this doesn't really belong in the diagnostics, it should be somehow returned in another way
@@ -343,7 +367,7 @@ impl BuildDiagnostics {
     }
 
     /// Return true if there is at least one compilation error for this file
-    pub fn has_error(&self) -> bool {
+    pub fn has_errors(&self) -> bool {
         self.inner.iter().any(|diag| diag.level == DiagnosticLevel::Error)
     }
 
@@ -443,7 +467,7 @@ impl BuildDiagnostics {
         span_map: &[crate::parser::Token],
     ) -> proc_macro::TokenStream {
         let mut result = proc_macro::TokenStream::default();
-        let mut needs_error = self.has_error();
+        let mut needs_error = self.has_errors();
         self.call_diagnostics(
             &mut (),
             Some(&mut |diag| {
@@ -519,7 +543,7 @@ impl BuildDiagnostics {
     #[cfg(feature = "display-diagnostics")]
     #[must_use]
     pub fn check_and_exit_on_error(self) -> Self {
-        if self.has_error() {
+        if self.has_errors() {
             self.print();
             std::process::exit(-1);
         }
@@ -528,7 +552,7 @@ impl BuildDiagnostics {
 
     #[cfg(feature = "display-diagnostics")]
     pub fn print_warnings_and_exit_on_error(self) {
-        let has_error = self.has_error();
+        let has_error = self.has_errors();
         self.print();
         if has_error {
             std::process::exit(-1);
@@ -566,7 +590,7 @@ component MainWindow inherits Window {
 
 
     "#.to_string();
-        let sf = SourceFileInner::new(PathBuf::from("foo.slint"), content.clone());
+        let sf = SourceFileInner::new(PathBuf::from("foo.slint"), content.clone(), None);
 
         let mut line = 1;
         let mut column = 1;

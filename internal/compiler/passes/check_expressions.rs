@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::rc::Rc;
 
@@ -20,7 +20,7 @@ fn check_expression(component: &Rc<Component>, e: &Expression, diag: &mut BuildD
     match e {
         Expression::MemberFunction { .. } => {
             // Must already have been be reported.
-            debug_assert!(diag.has_error());
+            debug_assert!(diag.has_errors());
         }
         Expression::BuiltinMacroReference(_, node) => {
             diag.push_error("Builtin function must be called".into(), node);

@@ -1,20 +1,14 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
-
-#![cfg(feature = "svg")]
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use super::{ImageCacheKey, SharedImageBuffer, SharedPixelBuffer};
 use crate::lengths::PhysicalPx;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::SharedString;
-use resvg::{
-    tiny_skia,
-    usvg::{self, TreeTextToPath},
-};
-use usvg::TreeParsing;
+use resvg::{tiny_skia, usvg};
 
 pub struct ParsedSVG {
-    svg_tree: resvg::Tree,
+    svg_tree: usvg::Tree,
     cache_key: ImageCacheKey,
 }
 
@@ -35,7 +29,7 @@ impl core::fmt::Debug for ParsedSVG {
 
 impl ParsedSVG {
     pub fn size(&self) -> crate::graphics::IntSize {
-        let size = self.svg_tree.size.to_int_size();
+        let size = self.svg_tree.size().to_int_size();
         [size.width(), size.height()].into()
     }
 
@@ -55,16 +49,16 @@ impl ParsedSVG {
             Some(size) => {
                 let target_size = tiny_skia::IntSize::from_wh(size.width, size.height)
                     .ok_or(usvg::Error::InvalidSize)?;
-                let target_size = tree.size.to_int_size().scale_to(target_size);
+                let target_size = tree.size().to_int_size().scale_to(target_size);
                 let target_size_f = target_size.to_size();
 
                 let transform = tiny_skia::Transform::from_scale(
-                    target_size_f.width() as f32 / tree.size.width() as f32,
-                    target_size_f.height() as f32 / tree.size.height() as f32,
+                    target_size_f.width() as f32 / tree.size().width() as f32,
+                    target_size_f.height() as f32 / tree.size().height() as f32,
                 );
                 (target_size, transform)
             }
-            None => (tree.size.to_int_size(), tiny_skia::Transform::default()),
+            None => (tree.size().to_int_size(), tiny_skia::Transform::default()),
         };
 
         let mut buffer = SharedPixelBuffer::new(target_size.width(), target_size.height());
@@ -75,23 +69,9 @@ impl ParsedSVG {
         )
         .ok_or(usvg::Error::InvalidSize)?;
 
-        tree.render(transform, &mut skia_buffer);
+        resvg::render(tree, transform, &mut skia_buffer);
         Ok(SharedImageBuffer::RGBA8Premultiplied(buffer))
     }
-}
-
-fn with_svg_options<T>(callback: impl FnOnce(&usvg::Options) -> T) -> T {
-    let options = usvg::Options::default();
-    callback(&options)
-}
-
-fn fixup_text(mut tree: usvg::Tree) -> usvg::Tree {
-    if tree.has_text_nodes() {
-        i_slint_common::sharedfontdb::FONT_DB.with(|db| {
-            tree.convert_text(&db.borrow());
-        })
-    }
-    tree
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,20 +81,17 @@ pub fn load_from_path(
 ) -> Result<ParsedSVG, std::io::Error> {
     let svg_data = std::fs::read(std::path::Path::new(&path.as_str()))?;
 
-    with_svg_options(|options| {
-        usvg::Tree::from_data(&svg_data, options)
-            .map(fixup_text)
-            .map(|usvg_tree| resvg::Tree::from_usvg(&usvg_tree))
+    i_slint_common::sharedfontdb::FONT_DB.with_borrow(|db| {
+        let option = usvg::Options { fontdb: (*db).clone(), ..Default::default() };
+        usvg::Tree::from_data(&svg_data, &option)
             .map(|svg| ParsedSVG { svg_tree: svg, cache_key })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
     })
 }
 
 pub fn load_from_data(slice: &[u8], cache_key: ImageCacheKey) -> Result<ParsedSVG, usvg::Error> {
-    with_svg_options(|options| {
-        usvg::Tree::from_data(slice, options)
-            .map(fixup_text)
-            .map(|usvg_tree| resvg::Tree::from_usvg(&usvg_tree))
-            .map(|svg| ParsedSVG { svg_tree: svg, cache_key })
+    i_slint_common::sharedfontdb::FONT_DB.with_borrow(|db| {
+        let option = usvg::Options { fontdb: (*db).clone(), ..Default::default() };
+        usvg::Tree::from_data(slice, &option).map(|svg| ParsedSVG { svg_tree: svg, cache_key })
     })
 }

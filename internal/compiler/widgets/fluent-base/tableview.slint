@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { FluentPalette, FluentFontSettings, Icons } from "styling.slint";
 import { ListView } from "../common/listview.slint";
@@ -102,7 +102,7 @@ component TableViewRow inherits Rectangle {
     min-width: i-layout.min-width;
     min-height: max(34px, i-layout.min-height);
     border-radius: 4px;
-    background: root.even ? FluentPalette.surface : transparent;
+    background: root.even ? FluentPalette.control-background : transparent;
 
     states [
         pressed when i-touch-area.pressed : {
@@ -136,7 +136,7 @@ component TableViewRow inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 3px;
         height: 0px;
-        background: FluentPalette.accent;
+        background: FluentPalette.accent-background;
         border-radius: 2px;
 
         animate height { duration: 150ms; easing: ease-out; }
@@ -196,6 +196,7 @@ export component StandardTableView {
     horizontal-stretch: 1;
     vertical-stretch: 1;
     forward-focus: i-focus-scope;
+    accessible-role: table;
 
     VerticalLayout {
         Rectangle {
@@ -270,7 +271,7 @@ export component StandardTableView {
                             text: cell.text;
                             font-weight: FluentFontSettings.body.font-weight;
                             font-size: FluentFontSettings.body.font-size;
-                            color: mod(idx, 2) == 0 ? FluentPalette.on-surface : FluentPalette.text-secondary;
+                            color: mod(idx, 2) == 0 ? FluentPalette.control-foreground : FluentPalette.text-secondary;
                         }
                     }
                 }

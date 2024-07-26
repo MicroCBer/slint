@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Flickable pass
 //!
@@ -51,7 +51,7 @@ fn create_viewport_element(flickable: &ElementRc, native_empty: &Rc<NativeClass>
         ..Element::default()
     });
     let element_type = flickable.borrow().base_type.clone();
-    for (prop, _) in &element_type.as_builtin().properties {
+    for prop in element_type.as_builtin().properties.keys() {
         if let Some(vp_prop) = prop.strip_prefix("viewport-") {
             // bind the viewport's property to the flickable property, such as:  `width <=> parent.viewport-width`
             viewport.borrow_mut().bindings.insert(

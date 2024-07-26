@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! This module contains all enums exposed in the .slint language.
 
@@ -44,8 +44,10 @@ macro_rules! for_each_enums {
             enum TextWrap {
                 /// The text won't wrap, but instead will overflow.
                 NoWrap,
-                /// The text will be wrapped at word boundaries.
+                /// The text will be wrapped at word boundaries if possible, or at any location for very long words.
                 WordWrap,
+                /// The text will be wrapped at any character. Currently only supported by the Qt and Software renderers.
+                CharWrap,
             }
 
             /// This enum describes the how the text appear if it is too wide to fit in the [`Text`](elements.md#text) width.
@@ -54,6 +56,14 @@ macro_rules! for_each_enums {
                 Clip,
                 /// The text will be elided with `…`.
                 Elide,
+            }
+
+            /// This enum describes the positioning of a text stroke relative to the border of the glyphs in a [`Text`](elements.md#text).
+            enum TextStrokeStyle {
+                /// The inside edge of the stroke is at the outer edge of the text.
+                Outside,
+                /// The center line of the stroke is at the outer edge of the text, like in Adobe Illustrator.
+                Center,
             }
 
             /// This enum describes whether an event was rejected or accepted by an event handler.
@@ -129,6 +139,8 @@ macro_rules! for_each_enums {
                 Down,
                 /// The button was released.
                 Up,
+                /// The pointer has moved,
+                Move,
             }
 
             /// This enum describes the different types of buttons for a pointer event,
@@ -222,8 +234,33 @@ macro_rules! for_each_enums {
                 Fill,
                 /// The source image is scaled to fit into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio.
                 Contain,
-                /// The source image is scaled to cover into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio. If the aspect ratio of the source image doesn't match the element's one, then the image will be clipped to fit.
+                /// The source image is scaled to cover into the [`Image`](elements.md#image) element's dimension while preserving the aspect ratio.
+                /// If the aspect ratio of the source image doesn't match the element's one, then the image will be clipped to fit.
                 Cover,
+                /// Preserves the size of the source image in logical pixels.
+                /// The source image will still be scaled by the scale factor that applies to all elements in the window.
+                /// Any extra space will be left blank.
+                Preserve,
+            }
+
+            /// This enum specifies the horizontal alignment of the source image.
+            enum ImageHorizontalAlignment {
+                /// Aligns the source image at the center of the [`Image`](elements.md#image) element.
+                Center,
+                /// Aligns the source image at the left of the [`Image`](elements.md#image) element.
+                Left,
+                /// Aligns the source image at the right of the [`Image`](elements.md#image) element.
+                Right,
+            }
+
+            /// This enum specifies the vertical alignment of the source image.
+            enum ImageVerticalAlignment {
+                /// Aligns the source image at the center of the [`Image`](elements.md#image) element.
+                Center,
+                /// Aligns the source image at the top of the [`Image`](elements.md#image) element.
+                Top,
+                /// Aligns the source image at the bottom of the [`Image`](elements.md#image) element.
+                Bottom,
             }
 
             /// This enum specifies how the source image will be scaled.
@@ -232,6 +269,16 @@ macro_rules! for_each_enums {
                 Smooth,
                 /// The image is scaled with the nearest neighbor algorithm.
                 Pixelated,
+            }
+
+            /// This enum specifies how the source image will be tiled.
+            enum ImageTiling {
+                /// The source image will not be tiled.
+                None,
+                /// The source image will be repeated to fill the [`Image`](elements.md#image) element.
+                Repeat,
+                /// The source image will be repeated and scaled to fill the [`Image`](elements.md#image) element, ensuring an integer number of repetitions.
+                Round,
             }
 
             /// This enum is used to define the type of the input field.
@@ -289,25 +336,39 @@ macro_rules! for_each_enums {
 
             /// This enum represents the different values for the `accessible-role` property, used to describe the
             /// role of an element in the context of assistive technology such as screen readers.
+            #[non_exhaustive]
             enum AccessibleRole {
                 /// The element isn't accessible.
                 None,
-                /// The element is a [`Button`](../widgets/button.md) or behaves like one.
+                /// The element is a [`Button`](slint-reference:src/language/widgets/button) or behaves like one.
                 Button,
-                /// The element is a [`CheckBox`](../widgets/checkbox.md) or behaves like one.
+                /// The element is a [`CheckBox`](slint-reference:src/language/widgets/checkbox) or behaves like one.
                 Checkbox,
-                /// The element is a [`ComboBox`](../widgets/combobox.md) or behaves like one.
+                /// The element is a [`ComboBox`](slint-reference:src/language/widgets/combobox) or behaves like one.
                 Combobox,
-                /// The element is a [`Slider`](../widgets/slider.md) or behaves like one.
+                /// The element is a [`ListView`](slint-reference:src/language/widgets/listview) or behaves like one.
+                List,
+                /// The element is a [`Slider`](slint-reference:src/language/widgets/slider) or behaves like one.
                 Slider,
-                /// The element is a [`SpinBox`](../widgets/spinbox.md) or behaves like one.
+                /// The element is a [`SpinBox`](slint-reference:src/language/widgets/spinbox) or behaves like one.
                 Spinbox,
-                /// The element is a [`Tab`](../widgets/tabwidget.md) or behaves like one.
+                /// The element is a [`Tab`](slint-reference:src/language/widgets/tabwidget) or behaves like one.
                 Tab,
-                /// The role for a [`Text`](elements.md#text) element. It's automatically applied.
+                /// The element is similar to the tab bar in a [`TabWidget`](slint-reference:src/language/widgets/tabwidget).
+                TabList,
+                /// The role for a [`Text`](slint-reference:src/language/builtins/elements#text) element. It's automatically applied.
                 Text,
-                /// The element is a [`ProgressIndicator`](../widgets/progressindicator.md) or behaves like one.
+                /// The role for a [`TableView`](slint-reference:src/language/widgets/standardtableview ) or behaves like one.
+                Table,
+                /// The role for a TreeView or behaves like one. (Not provided yet)
+                Tree,
+                /// The element is a [`ProgressIndicator`](slint-reference:src/language/widgets/progressindicator) or behaves like one.
                 ProgressIndicator,
+                /// The role for widget with editable text such as a
+                /// [`LineEdit`](slint-reference:src/language/widgets/lineedit) or a [`TextEdit`](slint-reference:src/language/widgets/textedit)
+                TextInput,
+                /// The element is a [`Switch`](slint-reference:src/language/widgets/switch) or behaves like one.
+                Switch,
             }
 
             /// This enum represents the different values of the `sort-order` property.
@@ -329,6 +390,18 @@ macro_rules! for_each_enums {
                 Horizontal,
                 /// Element is oriented vertically.
                 Vertical,
+            }
+
+            /// This enum indicates the color scheme used by the widget style. Use this to explicitly switch
+            /// between dark and light schemes, or choose Unknown to fall back to the system default.
+            enum ColorScheme {
+                /// The scheme is not known and a system wide setting configures this. This could mean that
+                /// the widgets are shown in a dark or light scheme, but it could also be a custom color scheme.
+                Unknown,
+                /// The style chooses light colors for the background and dark for the foreground.
+                Dark,
+                /// The style chooses dark colors for the background and light for the foreground.
+                Light,
             }
         ];
     };

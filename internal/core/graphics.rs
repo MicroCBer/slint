@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![warn(missing_docs)]
 /*!
@@ -14,6 +14,7 @@ extern crate alloc;
 use crate::lengths::LogicalLength;
 use crate::Coord;
 use crate::SharedString;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 
 pub use euclid;
@@ -51,6 +52,9 @@ pub mod rendering_metrics_collector;
 
 #[cfg(feature = "box-shadow-cache")]
 pub mod boxshadowcache;
+
+pub mod border_radius;
+pub use border_radius::*;
 
 /// CachedGraphicsData allows the graphics backend to store an arbitrary piece of data associated with
 /// an item, which is typically computed by accessing properties. The dependency_tracker is used to allow
@@ -192,6 +196,15 @@ pub mod ffi {
     struct Point {
         x: f32,
         y: f32,
+    }
+
+    /// Expand Box2D so that cbindgen can see it.
+    #[cfg(cbindgen)]
+    #[repr(C)]
+    struct Box2D<T, U> {
+        min: euclid::Point2D<T>,
+        max: euclid::Point2D<T>,
+        _unit: std::marker::PhantomData<U>,
     }
 
     #[cfg(feature = "std")]

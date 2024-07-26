@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use clap::Parser;
 use i_slint_compiler::diagnostics::{BuildDiagnostics, Spanned};
@@ -147,6 +147,8 @@ fn visit_node(node: SyntaxNode, results: &mut Messages, current_context: Option<
                     let mut builder = if let Some(plural) = plural {
                         let mut builder = polib::message::Message::build_plural();
                         builder.with_msgid_plural(plural);
+                        // Workaround for #4238 : poedit doesn't add the plural by default.
+                        builder.with_msgstr_plural(vec![String::new(), String::new()]);
                         builder
                     } else {
                         polib::message::Message::build_singular()
@@ -282,6 +284,7 @@ fn extract_messages() {
     let syntax_node = i_slint_compiler::parser::parse(
         source.into(),
         Some(std::path::Path::new("test.slint")),
+        None,
         &mut diag,
     );
 

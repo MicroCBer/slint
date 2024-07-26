@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 
@@ -182,6 +182,7 @@ cpp! {{
         // Leak the QApplication, otherwise it crashes on exit
         // (because the QGuiApplication destructor access some Q_GLOBAL_STATIC which are already gone)
         new QApplication(argc, argv);
+        qApp->setQuitOnLastWindowClosed(false);
     }
 
     // HACK ALERT: This struct declaration is duplicated in api/cpp/bindgen.rs - keep in sync.
@@ -320,6 +321,9 @@ pub use tabwidget::*;
 
 mod stylemetrics;
 pub use stylemetrics::*;
+
+mod palette;
+pub use palette::*;
 
 mod tableheadersection;
 pub use tableheadersection::*;

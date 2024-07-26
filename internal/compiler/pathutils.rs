@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Reimplement some Path handling code: The one in `std` is not available
 //! when running in WASM!
@@ -35,7 +35,7 @@ fn to_url(path: &str) -> Option<url::Url> {
 fn test_to_url() {
     #[track_caller]
     fn th(input: &str, expected: bool) {
-        assert_eq!(to_url(&input).is_some(), expected);
+        assert_eq!(to_url(input).is_some(), expected);
     }
 
     th("https://foo.bar/", true);
@@ -307,11 +307,7 @@ impl<'a> Iterator for Components<'a> {
     type Item = PathComponent<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let Some((result, new_offset, separator)) =
-            components(self.path, self.offset, &self.separator)
-        else {
-            return None;
-        };
+        let (result, new_offset, separator) = components(self.path, self.offset, &self.separator)?;
         self.offset = new_offset;
         self.separator = Some(separator);
 

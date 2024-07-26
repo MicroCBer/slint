@@ -1,9 +1,10 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![warn(missing_docs)]
 //! The animation system
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use core::cell::Cell;
 #[cfg(not(feature = "std"))]
@@ -215,8 +216,8 @@ impl Instant {
     }
 
     fn duration_since_start() -> core::time::Duration {
-        crate::platform::PLATFORM_INSTANCE
-            .with(|p| p.get().map(|p| p.duration_since_start()))
+        crate::context::GLOBAL_CONTEXT
+            .with(|p| p.get().map(|p| p.0.platform.duration_since_start()))
             .unwrap_or_default()
     }
 

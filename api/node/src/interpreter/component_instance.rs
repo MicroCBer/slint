@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use i_slint_compiler::langtype::Type;
 use i_slint_core::window::WindowInner;
@@ -57,7 +57,7 @@ impl JsComponentInstance {
             })?;
 
         self.inner
-            .set_property(&prop_name, super::value::to_value(&env, js_value, ty)?)
+            .set_property(&prop_name, super::value::to_value(&env, js_value, &ty)?)
             .map_err(|e| Error::from_reason(format!("{e}")))?;
 
         Ok(())
@@ -105,7 +105,7 @@ impl JsComponentInstance {
             .set_global_property(
                 global_name.as_str(),
                 &prop_name,
-                super::value::to_value(&env, js_value, ty)?,
+                super::value::to_value(&env, js_value, &ty)?,
             )
             .map_err(|e| Error::from_reason(format!("{e}")))?;
 
@@ -151,7 +151,7 @@ impl JsComponentInstance {
                             .unwrap();
 
                         if let Some(return_type) = &return_type {
-                            super::to_value(&env, result, *(*return_type).clone()).unwrap()
+                            super::to_value(&env, result, return_type).unwrap()
                         } else {
                             Value::Void
                         }
@@ -206,7 +206,7 @@ impl JsComponentInstance {
                             .unwrap();
 
                         if let Some(return_type) = &return_type {
-                            super::to_value(&env, result, *(*return_type).clone()).unwrap()
+                            super::to_value(&env, result, return_type).unwrap()
                         } else {
                             Value::Void
                         }
@@ -239,29 +239,32 @@ impl JsComponentInstance {
                 )
             })?;
 
-        let args = if let Type::Callback { args, .. } = ty {
-            let count = args.len();
-            let args = arguments
-                .into_iter()
-                .zip(args.into_iter())
-                .map(|(a, ty)| super::value::to_value(&env, a, ty))
-                .collect::<Result<Vec<_>, _>>()?;
-            if args.len() != count {
+        let args = match ty {
+            Type::Callback { args, .. } | Type::Function { args, .. } => {
+                let count = args.len();
+                let args = arguments
+                    .into_iter()
+                    .zip(args.into_iter())
+                    .map(|(a, ty)| super::value::to_value(&env, a, &ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if args.len() != count {
+                    return Err(napi::Error::from_reason(
+                        format!(
+                            "{} expect {} arguments, but {} where provided",
+                            callback_name,
+                            count,
+                            args.len()
+                        )
+                        .as_str(),
+                    ));
+                }
+                args
+            }
+            _ => {
                 return Err(napi::Error::from_reason(
-                    format!(
-                        "{} expect {} arguments, but {} where provided",
-                        callback_name,
-                        count,
-                        args.len()
-                    )
-                    .as_str(),
+                    format!("{} is not a callback or a function", callback_name).as_str(),
                 ));
             }
-            args
-        } else {
-            return Err(napi::Error::from_reason(
-                format!("{} is not a callback", callback_name).as_str(),
-            ));
         };
 
         let result = self
@@ -296,29 +299,36 @@ impl JsComponentInstance {
                 )
             })?;
 
-        let args = if let Type::Callback { args, .. } = ty {
-            let count = args.len();
-            let args = arguments
-                .into_iter()
-                .zip(args.into_iter())
-                .map(|(a, ty)| super::value::to_value(&env, a, ty))
-                .collect::<Result<Vec<_>, _>>()?;
-            if args.len() != count {
+        let args = match ty {
+            Type::Callback { args, .. } | Type::Function { args, .. } => {
+                let count = args.len();
+                let args = arguments
+                    .into_iter()
+                    .zip(args.into_iter())
+                    .map(|(a, ty)| super::value::to_value(&env, a, &ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if args.len() != count {
+                    return Err(napi::Error::from_reason(
+                        format!(
+                            "{} expect {} arguments, but {} where provided",
+                            callback_name,
+                            count,
+                            args.len()
+                        )
+                        .as_str(),
+                    ));
+                }
+                args
+            }
+            _ => {
                 return Err(napi::Error::from_reason(
                     format!(
-                        "{} expect {} arguments, but {} where provided",
-                        callback_name,
-                        count,
-                        args.len()
+                        "{} is not a callback or a function on global {}",
+                        callback_name, global_name
                     )
                     .as_str(),
                 ));
             }
-            args
-        } else {
-            return Err(napi::Error::from_reason(
-                format!("{} is not a callback on global {}", callback_name, global_name).as_str(),
-            ));
         };
 
         let result = self
@@ -331,11 +341,6 @@ impl JsComponentInstance {
     #[napi]
     pub fn send_mouse_click(&self, x: f64, y: f64) {
         slint_interpreter::testing::send_mouse_click(&self.inner, x as f32, y as f32);
-    }
-
-    #[napi]
-    pub fn send_mouse_double_click(&self, x: f64, y: f64) {
-        slint_interpreter::testing::send_mouse_double_click(&self.inner, x as f32, y as f32);
     }
 
     #[napi]

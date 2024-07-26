@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use i_slint_core::api::PhysicalSize as PhysicalWindowSize;
 use i_slint_core::platform::PlatformError;
@@ -9,13 +9,17 @@ use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, Insta
 use vulkano::swapchain::Surface;
 use vulkano::VulkanLibrary;
 
+use std::rc::Rc;
 use std::sync::Arc;
+
+use super::Presenter;
 
 pub struct VulkanDisplay {
     pub physical_device: Arc<PhysicalDevice>,
     pub queue_family_index: u32,
     pub surface: Arc<Surface>,
     pub size: PhysicalWindowSize,
+    pub presenter: Rc<dyn Presenter>,
 }
 
 pub fn create_vulkan_display() -> Result<VulkanDisplay, PlatformError> {
@@ -91,7 +95,8 @@ pub fn create_vulkan_display() -> Result<VulkanDisplay, PlatformError> {
                     .collect();
 
                 // Can't return error here because newlines are escaped.
-                panic!("\nVulkan Display List Requested:\n{}\n", display_names.join("\n"));
+                eprintln!("\nVulkan Display List Requested:\n{}\nPlease select a display with the SLINT_VULKAN_DISPLAY environment variable and re-run the program.", display_names.join("\n"));
+                std::process::exit(1);
             }
             let display_index: usize =
                 display_str.parse().map_err(|_| format!("Invalid display index {display_str}"))?;
@@ -140,7 +145,8 @@ pub fn create_vulkan_display() -> Result<VulkanDisplay, PlatformError> {
                     .collect();
 
                 // Can't return error here because newlines are escaped.
-                panic!("\nVulkan Mode List Requested:\n{}\n", mode_names.join("\n"));
+                eprintln!("\nVulkan Mode List Requested:\n{}\nPlease select a mode with the SLINT_VULKAN_MODE environment variable and re-run the program.", mode_names.join("\n"));
+                std::process::exit(1);
             }
             let mode_index: usize =
                 mode_str.parse().map_err(|_| format!("Invalid mode index {mode_str}"))?;
@@ -162,5 +168,11 @@ pub fn create_vulkan_display() -> Result<VulkanDisplay, PlatformError> {
 
     let size = PhysicalWindowSize::new(mode.visible_region()[0], mode.visible_region()[1]);
 
-    Ok(VulkanDisplay { physical_device, queue_family_index, surface: vulkan_surface, size })
+    Ok(VulkanDisplay {
+        physical_device,
+        queue_family_index,
+        surface: vulkan_surface,
+        size,
+        presenter: crate::display::timeranimations::TimerBasedAnimationDriver::new(),
+    })
 }

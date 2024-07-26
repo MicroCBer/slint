@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use super::DocumentCache;
 use crate::util::{lookup_current_element_type, map_node_and_url, with_lookup_ctx};
@@ -25,7 +25,7 @@ pub fn goto_definition(
             return match parent.kind() {
                 SyntaxKind::Type => {
                     let qual = i_slint_compiler::object_tree::QualifiedTypeName::from_node(n);
-                    let doc = document_cache.documents.get_document(node.source_file.path())?;
+                    let doc = document_cache.get_document_for_source_file(&node.source_file)?;
                     match doc.local_registry.lookup_qualified(&qual.members) {
                         Type::Struct { node: Some(node), .. } => goto_node(node.parent().as_ref()?),
                         Type::Enumeration(e) => goto_node(e.node.as_ref()?),
@@ -34,10 +34,10 @@ pub fn goto_definition(
                 }
                 SyntaxKind::Element => {
                     let qual = i_slint_compiler::object_tree::QualifiedTypeName::from_node(n);
-                    let doc = document_cache.documents.get_document(node.source_file.path())?;
+                    let doc = document_cache.get_document_for_source_file(&node.source_file)?;
                     match doc.local_registry.lookup_element(&qual.to_string()) {
                         Ok(ElementType::Component(c)) => {
-                            goto_node(c.root_element.borrow().node.as_ref()?)
+                            goto_node(&c.root_element.borrow().debug.first()?.node)
                         }
                         _ => None,
                     }
@@ -68,7 +68,7 @@ pub fn goto_definition(
                         LookupResult::Expression {
                             expression: Expression::ElementReference(e),
                             ..
-                        } => e.upgrade()?.borrow().node.clone()?.into(),
+                        } => e.upgrade()?.borrow().debug.first()?.node.clone().into(),
                         LookupResult::Expression {
                             expression:
                                 Expression::CallbackReference(nr, _)
@@ -104,10 +104,12 @@ pub fn goto_definition(
                 _ => None,
             };
         } else if let Some(n) = syntax_nodes::ImportIdentifier::new(node.clone()) {
-            let doc = document_cache.documents.get_document(node.source_file.path())?;
+            let doc = document_cache.get_document_for_source_file(&node.source_file)?;
             let imp_name = i_slint_compiler::typeloader::ImportedName::from_node(n);
             return match doc.local_registry.lookup_element(&imp_name.internal_name) {
-                Ok(ElementType::Component(c)) => goto_node(c.root_element.borrow().node.as_ref()?),
+                Ok(ElementType::Component(c)) => {
+                    goto_node(&c.root_element.borrow().debug.first()?.node)
+                }
                 _ => None,
             };
         } else if let Some(n) = syntax_nodes::ImportSpecifier::new(node.clone()) {
@@ -118,7 +120,7 @@ pub fn goto_definition(
                 .unwrap_or_else(|| Path::new("/"))
                 .join(n.child_text(SyntaxKind::StringLiteral)?.trim_matches('\"'));
             let import_file = clean_path(&import_file);
-            let doc = document_cache.documents.get_document(&import_file)?;
+            let doc = document_cache.get_document_by_path(&import_file)?;
             let doc_node = doc.node.clone()?;
             return goto_node(&doc_node);
         } else if syntax_nodes::BindingExpression::new(node.clone()).is_some() {
@@ -183,10 +185,10 @@ fn find_property_declaration_in_base(
     element: syntax_nodes::Element,
     prop_name: &str,
 ) -> Option<SyntaxNode> {
-    let global_tr = document_cache.documents.global_type_registry.borrow();
+    let global_tr = document_cache.global_type_registry();
     let tr = element
         .source_file()
-        .and_then(|sf| document_cache.documents.get_document(sf.path()))
+        .and_then(|sf| document_cache.get_document_for_source_file(sf))
         .map(|doc| &doc.local_registry)
         .unwrap_or(&global_tr);
 
@@ -209,4 +211,82 @@ fn goto_node(node: &SyntaxNode) -> Option<GotoDefinitionResponse> {
         target_range: range,
         target_selection_range: range,
     }]))
+}
+
+#[test]
+fn test_goto_definition() {
+    fn first_link(def: &GotoDefinitionResponse) -> &LocationLink {
+        let GotoDefinitionResponse::Link(link) = def else { panic!("not a single link {def:?}") };
+        link.first().unwrap()
+    }
+
+    let source = r#"
+import { Button } from "std-widgets.slint";
+component Abc {
+    in property <string> hello;
+}
+export component Test {
+    abc := Abc {
+        hello: "foo";
+    }
+    btn := Button {
+        text: abc.hello;
+    }
+    rec := Rectangle { }
+}"#;
+
+    let (mut dc, uri, _) = crate::language::test::loaded_document_cache(source.into());
+    let doc = dc.get_document(&uri).unwrap().node.clone().unwrap();
+
+    // Jump to the definition of Abc
+    let offset = source.find("abc := Abc").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset + 8).unwrap();
+    assert_eq!(token.text(), "Abc");
+    let def = goto_definition(&mut dc, token).unwrap();
+    let link = first_link(&def);
+    assert_eq!(link.target_uri, uri);
+    assert_eq!(link.target_range.start.line, 2);
+
+    // Jump to the definition of abc
+    let offset = source.find("text: abc.hello").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset + 7).unwrap();
+    assert_eq!(token.text(), "abc");
+    let def = goto_definition(&mut dc, token).unwrap();
+    let link = first_link(&def);
+    assert_eq!(link.target_uri, uri);
+    assert_eq!(link.target_range.start.line, 6);
+
+    // Jump to the definition of hello
+    let offset = source.find("text: abc.hello").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset + 12).unwrap();
+    assert_eq!(token.text(), "hello");
+    let def = goto_definition(&mut dc, token).unwrap();
+    let link = first_link(&def);
+    assert_eq!(link.target_uri, uri);
+    assert_eq!(link.target_range.start.line, 3);
+
+    // Also jump to the definition of hello
+    let offset = source.find("hello: \"foo\"").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset).unwrap();
+    assert_eq!(token.text(), "hello");
+    let def = goto_definition(&mut dc, token).unwrap();
+    let link = first_link(&def);
+    assert_eq!(link.target_uri, uri);
+    assert_eq!(link.target_range.start.line, 3);
+
+    // Rectangle is builtin and not accessible
+    let offset = source.find("rec := ").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset + 8).unwrap();
+    assert_eq!(token.text(), "Rectangle");
+    assert!(goto_definition(&mut dc, token).is_none());
+
+    // Button is builtin and not accessible
+    let offset = source.find("btn := ").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset + 9).unwrap();
+    assert_eq!(token.text(), "Button");
+    assert!(goto_definition(&mut dc, token).is_none());
+    let offset = source.find("text: abc.hello").unwrap() as u32;
+    let token = crate::language::token_at_offset(&doc, offset).unwrap();
+    assert_eq!(token.text(), "text");
+    assert!(goto_definition(&mut dc, token).is_none());
 }

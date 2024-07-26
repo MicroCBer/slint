@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore datetime dotdot gettext
 
@@ -403,9 +403,9 @@ lazy_static! {
         ("^\\.clang-format$", LicenseLocation::NoLicense),
         ("^\\.github/.*\\.md$", LicenseLocation::NoLicense),
         ("^\\.mailmap$", LicenseLocation::NoLicense),
+        ("^\\.prettierrc$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("^\\.pre-commit-config\\.yaml$", LicenseLocation::NoLicense),
         ("^\\.reuse/dep5$", LicenseLocation::NoLicense), // .reuse files have no license headers
-        ("^api/cpp/docs/Pipfile$", LicenseLocation::NoLicense),
         ("^api/cpp/docs/conf\\.py$", LicenseLocation::NoLicense),
         ("^docs/reference/Pipfile$", LicenseLocation::NoLicense),
         ("^docs/reference/conf\\.py$", LicenseLocation::NoLicense),
@@ -413,6 +413,7 @@ lazy_static! {
         ("^editors/tree-sitter-slint/binding\\.gyp$", LicenseLocation::NoLicense), // liberal license
         ("^editors/tree-sitter-slint/test-to-corpus\\.py$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("^Cargo\\.lock$", LicenseLocation::NoLicense),
+        ("^examples/printerdemo_mcu/zephyr/VERSION$", LicenseLocation::NoLicense),
 
         // filename based matches:
         ("(^|/)CMakeLists\\.txt$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
@@ -424,14 +425,15 @@ lazy_static! {
         ("(^|/)\\.eslintrc\\.yml$", LicenseLocation::NoLicense),
         ("(^|/)memory\\.x$", LicenseLocation::NoLicense), // third-party file
         ("(^|/)webpack\\..+\\.js$", LicenseLocation::NoLicense),
-        ("(^|/)partitions\\.csv$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("(^|/)partitions\\.csv$", LicenseLocation::NoLicense),
         ("(^|/)sdkconfig", LicenseLocation::NoLicense), // auto-generated
+        ("(^|/)Pipfile$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
 
         // Path prefix matches:
         ("^editors/tree-sitter-slint/corpus/", LicenseLocation::NoLicense), // liberal license
         ("^api/cpp/docs/_static/", LicenseLocation::NoLicense),
         ("^api/cpp/docs/_templates/", LicenseLocation::NoLicense),
-        ("^docs/tutorial/theme/", LicenseLocation::NoLicense),
+        ("^docs/quickstart/theme/", LicenseLocation::NoLicense),
         ("^editors/tree-sitter-slint/queries/", LicenseLocation::NoLicense), // liberal license
 
         // directory based matches
@@ -442,15 +444,18 @@ lazy_static! {
         ("\\.60\\.disabled$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.cmake$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("\\.cmake.in$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("\\.conf$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("\\.cpp$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.css$", LicenseLocation::NoLicense),
         ("\\.gitattributes$", LicenseLocation::NoLicense),
         ("\\.gitignore$", LicenseLocation::NoLicense),
         ("\\.dockerignore$", LicenseLocation::NoLicense),
+        ("\\.dockerignore$", LicenseLocation::NoLicense),
         ("\\.prettierignore$", LicenseLocation::NoLicense),
         ("\\.npmignore$", LicenseLocation::NoLicense),
         ("\\.h$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.html$", LicenseLocation::NoLicense),
+        ("\\.java$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.jpg$", LicenseLocation::NoLicense),
         ("\\.js$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.json$", LicenseLocation::NoLicense),
@@ -458,6 +463,7 @@ lazy_static! {
         ("\\.md$", LicenseLocation::Tag(LicenseTagStyle::html_comment_style())),
         ("\\.mjs$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.mts$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
+        ("\\.overlay$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
         ("\\.pdf$", LicenseLocation::NoLicense),
         ("\\.png$", LicenseLocation::NoLicense),
         ("\\.mo$", LicenseLocation::NoLicense),
@@ -481,6 +487,8 @@ lazy_static! {
         ("\\.xml$", LicenseLocation::NoLicense),
         ("\\.yaml$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
         ("\\.yml$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("\\.py$", LicenseLocation::Tag(LicenseTagStyle::shell_comment_style())),
+        ("\\.proto$", LicenseLocation::Tag(LicenseTagStyle::c_style_comment_style())),
     ]
     .iter()
     .map(|(re, ty)| (regex::Regex::new(re).unwrap(), *ty))
@@ -489,6 +497,7 @@ lazy_static! {
 
 lazy_static! {
     static ref LICENSE_FOR_FILE: Vec<(regex::Regex, &'static str)> = [
+        ("^editors/tree-sitter-slint/grammar.js$", MIT_LICENSE),
         ("^helper_crates/const-field-offset/", MIT_OR_APACHE2_LICENSE),
         ("^helper_crates/vtable/", MIT_OR_APACHE2_LICENSE),
         ("^api/cpp/esp-idf/LICENSE$", TRIPLE_LICENSE),
@@ -506,7 +515,7 @@ lazy_static! {
 }
 
 const TRIPLE_LICENSE: &str =
-    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial";
+    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0";
 const MIT_LICENSE: &str = "MIT";
 const MIT_OR_APACHE2_LICENSE: &str = "MIT OR Apache-2.0";
 
@@ -541,7 +550,7 @@ impl<'a> LicenseHeader<'a> {
 
 #[cfg(test)]
 const EXPECTED_SPDX_EXPRESSION: &str =
-    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial";
+    "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0";
 
 const SPDX_LICENSE_ID: &str = const_format::concatcp!("SP", "DX-License-Identifier:"); // Do not confuse the reuse tool
 const SPDX_LICENSE_LINE: &str = const_format::concatcp!(SPDX_LICENSE_ID, " "); // Do not confuse the reuse tool
@@ -616,7 +625,7 @@ impl CargoDependency {
 
 struct CargoToml {
     path: std::path::PathBuf,
-    doc: toml_edit::Document,
+    doc: toml_edit::DocumentMut,
     edited: bool,
 }
 

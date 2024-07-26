@@ -1,9 +1,10 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore rfind
 
-use super::DocumentCache;
+use crate::common::component_catalog::all_exported_components;
+use crate::common::{self, DocumentCache};
 use crate::util::{lookup_current_element_type, map_position, with_lookup_ctx};
 
 #[cfg(target_arch = "wasm32")]
@@ -12,11 +13,13 @@ use i_slint_compiler::diagnostics::Spanned;
 use i_slint_compiler::expression_tree::Expression;
 use i_slint_compiler::langtype::{ElementType, Type};
 use i_slint_compiler::lookup::{LookupCtx, LookupObject, LookupResult};
+use i_slint_compiler::object_tree::ElementRc;
 use i_slint_compiler::parser::{syntax_nodes, SyntaxKind, SyntaxToken};
 use lsp_types::{
     CompletionClientCapabilities, CompletionItem, CompletionItemKind, InsertTextFormat, Position,
     Range, TextEdit,
 };
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -135,7 +138,7 @@ pub(crate) fn completion_at(
         if let Some(colon) = n.child_token(SyntaxKind::Colon) {
             if offset >= colon.text_range().end().into() {
                 return with_lookup_ctx(document_cache, node, |ctx| {
-                    resolve_expression_scope(ctx).map(Into::into)
+                    resolve_expression_scope(ctx, document_cache, snippet_support).map(Into::into)
                 })?;
             }
         }
@@ -149,20 +152,26 @@ pub(crate) fn completion_at(
                 .collect::<Vec<_>>(),
         );
     } else if let Some(n) = syntax_nodes::TwoWayBinding::new(node.clone()) {
-        if token.kind() != SyntaxKind::Identifier {
+        let double_arrow_range =
+            n.children_with_tokens().find(|n| n.kind() == SyntaxKind::DoubleArrow)?.text_range();
+        if offset < double_arrow_range.end().into() {
             return None;
         }
-        let all = resolve_element_scope(syntax_nodes::Element::new(n.parent()?)?, document_cache)?;
-        return Some(
-            all.into_iter()
-                .filter(|ce| ce.kind == Some(CompletionItemKind::PROPERTY))
-                .collect::<Vec<_>>(),
-        );
+        return with_lookup_ctx(document_cache, node, |ctx| {
+            resolve_expression_scope(ctx, document_cache, snippet_support)
+        })?;
     } else if let Some(n) = syntax_nodes::CallbackConnection::new(node.clone()) {
         if token.kind() != SyntaxKind::Identifier {
             return None;
         }
-        let all = resolve_element_scope(syntax_nodes::Element::new(n.parent()?)?, document_cache)?;
+        let mut parent = n.parent()?;
+        let element = loop {
+            if let Some(e) = syntax_nodes::Element::new(parent.clone()) {
+                break e;
+            }
+            parent = parent.parent()?;
+        };
+        let all = resolve_element_scope(element, document_cache)?;
         return Some(
             all.into_iter()
                 .filter(|ce| ce.kind == Some(CompletionItemKind::METHOD))
@@ -222,16 +231,16 @@ pub(crate) fn completion_at(
         }
 
         return with_lookup_ctx(document_cache, node, |ctx| {
-            resolve_expression_scope(ctx).map(Into::into)
+            resolve_expression_scope(ctx, document_cache, snippet_support).map(Into::into)
         })?;
     } else if let Some(q) = syntax_nodes::QualifiedName::new(node.clone()) {
         match q.parent()?.kind() {
             SyntaxKind::Element => {
                 // auto-complete the components
-                let global_tr = document_cache.documents.global_type_registry.borrow();
+                let global_tr = document_cache.global_type_registry();
                 let tr = q
                     .source_file()
-                    .and_then(|sf| document_cache.documents.get_document(sf.path()))
+                    .and_then(|sf| document_cache.get_document_for_source_file(sf))
                     .map(|doc| &doc.local_registry)
                     .unwrap_or(&global_tr);
 
@@ -270,7 +279,8 @@ pub(crate) fn completion_at(
                     });
                     let first = it.next();
                     if first.as_ref().map_or(true, |f| f.token == token.token) {
-                        return resolve_expression_scope(ctx).map(Into::into);
+                        return resolve_expression_scope(ctx, document_cache, snippet_support)
+                            .map(Into::into);
                     }
                     let first = i_slint_compiler::parser::normalize_identifier(first?.text());
                     let global = i_slint_compiler::lookup::global_lookup();
@@ -304,13 +314,12 @@ pub(crate) fn completion_at(
         let import = syntax_nodes::ImportSpecifier::new(node.parent()?)?;
 
         let path = document_cache
-            .documents
             .resolve_import_path(
                 Some(&token.into()),
                 import.child_text(SyntaxKind::StringLiteral)?.trim_matches('\"'),
             )?
             .0;
-        let doc = document_cache.documents.get_document(&path)?;
+        let doc = document_cache.get_document_by_path(&path)?;
         return Some(
             doc.exports
                 .iter()
@@ -321,7 +330,7 @@ pub(crate) fn completion_at(
                 .collect(),
         );
     } else if node.kind() == SyntaxKind::Document {
-        let r: Vec<_> = [
+        let mut r: Vec<_> = [
             // the $1 is first in the quote so the filename can be completed before the import names
             ("import", "import { ${2:Component} } from \"${1:std-widgets.slint}\";"),
             ("component", "component ${1:Component} {\n    $0\n}"),
@@ -339,7 +348,33 @@ pub(crate) fn completion_at(
             with_insert_text(c, ins_tex, snippet_support)
         })
         .collect();
+        if let Some(component) = token
+            .prev_sibling_or_token()
+            .filter(|x| x.kind() == SyntaxKind::Component)
+            .and_then(|x| x.into_node())
+        {
+            let has_child = |kind| {
+                !component.children().find(|n| n.kind() == kind).unwrap().text_range().is_empty()
+            };
+            if has_child(SyntaxKind::DeclaredIdentifier) && !has_child(SyntaxKind::Element) {
+                let mut c = CompletionItem::new_simple("inherits".into(), String::new());
+                c.kind = Some(CompletionItemKind::KEYWORD);
+                r.push(c)
+            }
+        }
         return Some(r);
+    } else if let Some(c) = syntax_nodes::Component::new(node.clone()) {
+        let id_range = c.DeclaredIdentifier().text_range();
+        if !id_range.is_empty()
+            && offset >= id_range.end().into()
+            && !c
+                .children_with_tokens()
+                .any(|c| c.as_token().map_or(false, |t| t.text() == "inherits"))
+        {
+            let mut c = CompletionItem::new_simple("inherits".into(), String::new());
+            c.kind = Some(CompletionItemKind::KEYWORD);
+            return Some(vec![c]);
+        }
     } else if node.kind() == SyntaxKind::State {
         let r: Vec<_> = [("when", "when $1: {\n    $0\n}")]
             .iter()
@@ -351,7 +386,7 @@ pub(crate) fn completion_at(
             .collect();
         return Some(r);
     } else if node.kind() == SyntaxKind::PropertyAnimation {
-        let global_tr = document_cache.documents.global_type_registry.borrow();
+        let global_tr = document_cache.global_type_registry();
         let r = global_tr
             .property_animation_type_for_property(Type::Float32)
             .property_list()
@@ -383,53 +418,69 @@ fn with_insert_text(
     c
 }
 
+/// Try to return the completion items for the location inside an element.
+/// `FooBar { /* HERE */ }`
+/// So properties and potential sub elements
 fn resolve_element_scope(
     element: syntax_nodes::Element,
     document_cache: &DocumentCache,
 ) -> Option<Vec<CompletionItem>> {
-    let global_tr = document_cache.documents.global_type_registry.borrow();
+    let global_tr = document_cache.global_type_registry();
     let tr = element
         .source_file()
-        .and_then(|sf| document_cache.documents.get_document(sf.path()))
+        .and_then(|sf| document_cache.get_document_for_source_file(sf))
         .map(|doc| &doc.local_registry)
         .unwrap_or(&global_tr);
     let element_type = lookup_current_element_type((*element).clone(), tr).unwrap_or_default();
     let mut result = element_type
         .property_list()
         .into_iter()
+        .filter(|(k, ty)| {
+            if matches!(ty, Type::Function { .. }) {
+                return false;
+            }
+            if let ElementType::Component(c) = &element_type {
+                let mut lk = c.root_element.borrow().lookup_property(k);
+                lk.is_local_to_component = false;
+                return lk.is_valid_for_assignment();
+            }
+            true
+        })
         .map(|(k, t)| {
+            let k = de_normalize_property_name(&element_type, &k).into_owned();
             let mut c = CompletionItem::new_simple(k, t.to_string());
             c.kind = Some(if matches!(t, Type::InferredCallback | Type::Callback { .. }) {
                 CompletionItemKind::METHOD
             } else {
                 CompletionItemKind::PROPERTY
             });
+            c.sort_text = Some(format!("#{}", c.label));
             c
         })
-        .chain(element.PropertyDeclaration().map(|pr| {
+        .chain(element.PropertyDeclaration().filter_map(|pr| {
             let mut c = CompletionItem::new_simple(
-                i_slint_compiler::parser::identifier_text(&pr.DeclaredIdentifier())
-                    .unwrap_or_default(),
+                pr.DeclaredIdentifier().child_text(SyntaxKind::Identifier)?,
                 pr.Type().map(|t| t.text().into()).unwrap_or_else(|| "property".to_owned()),
             );
             c.kind = Some(CompletionItemKind::PROPERTY);
-            c
+            c.sort_text = Some(format!("#{}", c.label));
+            Some(c)
         }))
-        .chain(element.CallbackDeclaration().map(|cd| {
+        .chain(element.CallbackDeclaration().filter_map(|cd| {
             let mut c = CompletionItem::new_simple(
-                i_slint_compiler::parser::identifier_text(&cd.DeclaredIdentifier())
-                    .unwrap_or_default(),
+                cd.DeclaredIdentifier().child_text(SyntaxKind::Identifier)?,
                 "callback".into(),
             );
             c.kind = Some(CompletionItemKind::METHOD);
-            c
+            c.sort_text = Some(format!("#{}", c.label));
+            Some(c)
         }))
         .collect::<Vec<_>>();
 
     if !matches!(element_type, ElementType::Global) {
         result.extend(
             i_slint_compiler::typeregister::reserved_properties()
-                .filter_map(|(k, t)| {
+                .filter_map(|(k, t, _)| {
                     if matches!(t, Type::Function { .. }) {
                         return None;
                     }
@@ -456,20 +507,88 @@ fn resolve_element_scope(
     Some(result)
 }
 
-fn resolve_expression_scope(lookup_context: &LookupCtx) -> Option<Vec<CompletionItem>> {
+/// Given a property name in the specified element, give the non-normalized name (so that the '_' and '-' fits the definition of the property)
+fn de_normalize_property_name<'a>(element_type: &ElementType, prop: &'a str) -> Cow<'a, str> {
+    match element_type {
+        ElementType::Component(base) => {
+            de_normalize_property_name_with_element(&base.root_element, prop)
+        }
+        _ => prop.into(),
+    }
+}
+
+// Same as de_normalize_property_name, but use a `ElementRc`
+fn de_normalize_property_name_with_element<'a>(element: &ElementRc, prop: &'a str) -> Cow<'a, str> {
+    if let Some(d) = element.borrow().property_declarations.get(prop) {
+        d.node
+            .as_ref()
+            .and_then(|n| n.child_node(SyntaxKind::DeclaredIdentifier))
+            .and_then(|n| n.child_text(SyntaxKind::Identifier))
+            .map_or(prop.into(), |x| x.into())
+    } else {
+        de_normalize_property_name(&element.borrow().base_type, prop)
+    }
+}
+
+fn resolve_expression_scope(
+    lookup_context: &LookupCtx,
+    document_cache: &common::DocumentCache,
+    snippet_support: bool,
+) -> Option<Vec<CompletionItem>> {
     let mut r = Vec::new();
     let global = i_slint_compiler::lookup::global_lookup();
     global.for_each_entry(lookup_context, &mut |str, expr| -> Option<()> {
         r.push(completion_item_from_expression(str, expr));
         None
     });
+    if snippet_support {
+        if let Some(token) = lookup_context.current_token.as_ref().and_then(|t| match t {
+            i_slint_compiler::parser::NodeOrToken::Node(n) => n.first_token(),
+            i_slint_compiler::parser::NodeOrToken::Token(t) => Some(t.clone()),
+        }) {
+            let mut available_types: HashSet<String> = r.iter().map(|c| c.label.clone()).collect();
+            build_import_statements_edits(
+                &token,
+                document_cache,
+                &mut |ci: &common::ComponentInformation| {
+                    if !ci.is_global || !ci.is_exported || available_types.contains(&ci.name) {
+                        false
+                    } else {
+                        available_types.insert(ci.name.clone());
+                        true
+                    }
+                },
+                &mut |exported_name, file, the_import| {
+                    r.push(CompletionItem {
+                        label: format!("{} (import from \"{}\")", exported_name, file),
+                        insert_text: Some(exported_name.to_string()),
+                        insert_text_format: Some(InsertTextFormat::SNIPPET),
+                        filter_text: Some(exported_name.to_string()),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some(format!("(import from \"{}\")", file)),
+                        additional_text_edits: Some(vec![the_import]),
+                        ..Default::default()
+                    });
+                },
+            );
+        }
+    }
     Some(r)
 }
 
 fn completion_item_from_expression(str: &str, lookup_result: LookupResult) -> CompletionItem {
     match lookup_result {
         LookupResult::Expression { expression, .. } => {
-            let mut c = CompletionItem::new_simple(str.to_string(), expression.ty().to_string());
+            let label = match &expression {
+                Expression::CallbackReference(nr, ..)
+                | Expression::FunctionReference(nr, ..)
+                | Expression::PropertyReference(nr) => {
+                    de_normalize_property_name_with_element(&nr.element(), str).into_owned()
+                }
+                _ => str.to_string(),
+            };
+
+            let mut c = CompletionItem::new_simple(label, expression.ty().to_string());
             c.kind = match expression {
                 Expression::BoolLiteral(_) => Some(CompletionItemKind::CONSTANT),
                 Expression::CallbackReference(..) => Some(CompletionItemKind::METHOD),
@@ -505,10 +624,10 @@ fn resolve_type_scope(
     token: SyntaxToken,
     document_cache: &DocumentCache,
 ) -> Option<Vec<CompletionItem>> {
-    let global_tr = document_cache.documents.global_type_registry.borrow();
+    let global_tr = document_cache.global_type_registry();
     let tr = token
         .source_file()
-        .and_then(|sf| document_cache.documents.get_document(sf.path()))
+        .and_then(|sf| document_cache.get_document_for_source_file(sf))
         .map(|doc| &doc.local_registry)
         .unwrap_or(&global_tr);
     Some(
@@ -561,19 +680,54 @@ fn complete_path_in_string(base: &Path, text: &str, offset: u32) -> Option<Vec<C
 /// import and should already be in result
 fn add_components_to_import(
     token: &SyntaxToken,
-    document_cache: &mut DocumentCache,
+    document_cache: &common::DocumentCache,
     mut available_types: HashSet<String>,
     result: &mut Vec<CompletionItem>,
-) -> Option<()> {
-    // Find out types that can be imported
-    let current_file = token.source_file.path().to_owned();
-    let current_uri = lsp_types::Url::from_file_path(&current_file).ok()?;
-    let current_doc = document_cache.documents.get_document(&current_file)?.node.as_ref()?;
+) {
+    build_import_statements_edits(
+        token,
+        document_cache,
+        &mut |ci: &common::ComponentInformation| {
+            if ci.is_global || !ci.is_exported || available_types.contains(&ci.name) {
+                false
+            } else {
+                available_types.insert(ci.name.clone());
+                true
+            }
+        },
+        &mut |exported_name, file, the_import| {
+            result.push(CompletionItem {
+                label: format!("{} (import from \"{}\")", exported_name, file),
+                insert_text: if is_followed_by_brace(token) {
+                    Some(exported_name.to_string())
+                } else {
+                    Some(format!("{} {{$1}}", exported_name))
+                },
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                filter_text: Some(exported_name.to_string()),
+                kind: Some(CompletionItemKind::CLASS),
+                detail: Some(format!("(import from \"{}\")", file)),
+                additional_text_edits: Some(vec![the_import]),
+                ..Default::default()
+            });
+        },
+    );
+}
+
+/// Find the insert location for new imports in the `document`
+///
+/// The result is a tuple with the first element pointing to the place new import statements should
+/// get added. The second element in the tuple is a HashMap mapping import file names to the
+/// correct location to enter more components into the existing import statement.
+fn find_import_locations(
+    document: &syntax_nodes::Document,
+) -> (Position, HashMap<String, Position>) {
     let mut import_locations = HashMap::new();
     let mut last = 0u32;
-    for import in current_doc.ImportSpecifier() {
+    for import in document.ImportSpecifier() {
         if let Some((loc, file)) = import.ImportIdentifierList().and_then(|list| {
-            let id = list.ImportIdentifier().last()?;
+            let node = list.ImportIdentifier().last()?;
+            let id = crate::util::last_non_ws_token(&node).or_else(|| node.first_token())?;
             Some((
                 map_position(id.source_file()?, id.text_range().end()),
                 import.child_token(SyntaxKind::StringLiteral)?,
@@ -596,7 +750,7 @@ fn add_components_to_import(
         // component Foo {
         // ```
         let mut offset = None;
-        for it in current_doc.children_with_tokens() {
+        for it in document.children_with_tokens() {
             match it.kind() {
                 SyntaxKind::Comment => {
                     if offset.is_none() {
@@ -618,66 +772,93 @@ fn add_components_to_import(
                 }
             }
         }
-        map_position(&token.source_file, offset.unwrap_or_default())
+        map_position(&document.source_file, offset.unwrap_or_default())
     } else {
-        Position::new(map_position(&token.source_file, last.into()).line + 1, 0)
+        Position::new(map_position(&document.source_file, last.into()).line + 1, 0)
     };
 
-    for file in document_cache.documents.all_files() {
-        let Some(doc) = document_cache.documents.get_document(file) else { continue };
-        let file = if file.starts_with("builtin:/") {
-            match file.file_name() {
-                Some(file) if file == "std-widgets.slint" => "std-widgets.slint".into(),
-                _ => continue,
-            }
-        } else {
-            match lsp_types::Url::make_relative(
-                &current_uri,
-                &lsp_types::Url::from_file_path(file)
-                    .unwrap_or_else(|()| panic!("Cannot parse URL for file '{file:?}'")),
-            ) {
-                Some(file) => file,
-                None => continue,
-            }
+    (new_import_position, import_locations)
+}
+
+fn create_import_edit_impl(
+    component: &str,
+    import_path: &str,
+    missing_import_location: &Position,
+    known_import_locations: &HashMap<String, Position>,
+) -> TextEdit {
+    known_import_locations.get(import_path).map_or_else(
+        || {
+            TextEdit::new(
+                Range::new(*missing_import_location, *missing_import_location),
+                format!("import {{ {} }} from \"{}\";\n", component, import_path),
+            )
+        },
+        |pos| TextEdit::new(Range::new(*pos, *pos), format!(", {}", component)),
+    )
+}
+
+/// Creates a text edit
+#[cfg(any(feature = "preview-external", feature = "preview-engine"))]
+pub fn create_import_edit(
+    document: &i_slint_compiler::object_tree::Document,
+    component: &str,
+    import_path: &Option<String>,
+) -> Option<TextEdit> {
+    let import_path = import_path.as_ref()?;
+    let doc_node = document.node.as_ref().unwrap();
+
+    if document.local_registry.lookup_element(component).is_ok() {
+        None // already known, no import needed
+    } else {
+        let (missing_import_location, known_import_locations) = find_import_locations(doc_node);
+
+        Some(create_import_edit_impl(
+            component,
+            import_path,
+            &missing_import_location,
+            &known_import_locations,
+        ))
+    }
+}
+
+/// Try to generate `import { XXX } from "foo.slint";` for every component
+///
+/// This is used for auto-completion and also for fixup diagnostics
+///
+/// Call `add_edit` with the component name and file name and TextEdit for every component for which the `filter` callback returns true
+pub fn build_import_statements_edits(
+    token: &SyntaxToken,
+    document_cache: &common::DocumentCache,
+    filter: &mut dyn FnMut(&common::ComponentInformation) -> bool,
+    add_edit: &mut dyn FnMut(&str, &str, TextEdit),
+) -> Option<()> {
+    // Find out types that can be imported
+    let current_file = token.source_file.path().to_owned();
+    let current_uri = lsp_types::Url::from_file_path(&current_file).ok();
+    let current_doc =
+        document_cache.get_document_for_source_file(&token.source_file)?.node.as_ref()?;
+    let (missing_import_location, known_import_locations) = find_import_locations(current_doc);
+
+    let exports = {
+        let mut tmp = Vec::new();
+        all_exported_components(document_cache, filter, &mut tmp);
+        tmp
+    };
+
+    for ci in &exports {
+        let Some(file) = ci.import_file_name(&current_uri) else {
+            continue;
         };
 
-        for (exported_name, ty) in &*doc.exports {
-            if available_types.contains(&exported_name.name) {
-                continue;
-            }
-            if let Some(c) = ty.as_ref().left() {
-                if c.is_global() {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-            available_types.insert(exported_name.name.clone());
-            let the_import = import_locations.get(&file).map_or_else(
-                || {
-                    TextEdit::new(
-                        Range::new(new_import_position, new_import_position),
-                        format!("import {{ {} }} from \"{}\";\n", exported_name.name, file),
-                    )
-                },
-                |pos| TextEdit::new(Range::new(*pos, *pos), format!(", {}", exported_name.name)),
-            );
-            result.push(CompletionItem {
-                label: format!("{} (import from \"{}\")", exported_name.name, file),
-                insert_text: if is_followed_by_brace(token) {
-                    Some(exported_name.name.clone())
-                } else {
-                    Some(format!("{} {{$1}}", exported_name.name))
-                },
-                insert_text_format: Some(InsertTextFormat::SNIPPET),
-                filter_text: Some(exported_name.name.clone()),
-                kind: Some(CompletionItemKind::CLASS),
-                detail: Some(format!("(import from \"{}\")", file)),
-                additional_text_edits: Some(vec![the_import]),
-                ..Default::default()
-            });
-        }
+        let the_import = create_import_edit_impl(
+            &ci.name,
+            &file,
+            &missing_import_location,
+            &known_import_locations,
+        );
+        add_edit(&ci.name, &file, the_import);
     }
+
     Some(())
 }
 
@@ -695,7 +876,6 @@ fn is_followed_by_brace(token: &SyntaxToken) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language::uri_to_file;
 
     /// Given a source text containing the unicode emoji `🔺`, the emoji will be removed and then an autocompletion request will be done as if the cursor was there
     fn get_completions(file: &str) -> Option<Vec<CompletionItem>> {
@@ -704,7 +884,7 @@ mod tests {
         let source = file.replace(CURSOR_EMOJI, "");
         let (mut dc, uri, _) = crate::language::test::loaded_document_cache(source);
 
-        let doc = dc.documents.get_document(&uri_to_file(&uri).unwrap()).unwrap();
+        let doc = dc.get_document(&uri).unwrap();
         let token = crate::language::token_at_offset(doc.node.as_ref().unwrap(), offset)?;
         let caps = CompletionClientCapabilities {
             completion_item: Some(lsp_types::CompletionItemCapability {
@@ -757,6 +937,14 @@ mod tests {
             res.iter().find(|ci| ci.label == "self").unwrap();
             res.iter().find(|ci| ci.label == "root").unwrap();
             res.iter().find(|ci| ci.label == "TextInputInterface").unwrap();
+            let palette = res
+                .iter()
+                .find(|ci| ci.insert_text.as_ref().is_some_and(|t| t == "Palette"))
+                .unwrap();
+            assert_eq!(
+                palette.additional_text_edits.as_ref().unwrap()[0].new_text,
+                "import { Palette } from \"std-widgets.slint\";\n"
+            );
 
             assert!(!res.iter().any(|ci| ci.label == "text"));
             assert!(!res.iter().any(|ci| ci.label == "red"));
@@ -766,6 +954,101 @@ mod tests {
             assert!(!res.iter().any(|ci| ci.label == "Clip"));
             assert!(!res.iter().any(|ci| ci.label == "NativeStyleMetrics"));
             assert!(!res.iter().any(|ci| ci.label == "SlintInternal"));
+        }
+    }
+
+    #[test]
+    fn in_element() {
+        let source = r#"
+            component Bar inherits TouchArea {
+                callback the-callback();
+                private property <int> priv_prop;
+                in property <[string]> in_prop;
+                out property <string> out_prop;
+                property <int> priv_prop2;
+                function priv_func() {}
+                public pure function pub_func() {}
+                @children
+            }
+            component Foo {
+                Bar {
+                    🔺
+
+                    property <int> local-prop;
+                }
+            }
+        "#;
+        let res = get_completions(source).unwrap();
+        // from TouchArea
+        res.iter().find(|ci| ci.label == "enabled").unwrap();
+        res.iter().find(|ci| ci.label == "clicked").unwrap();
+        // general
+        res.iter().find(|ci| ci.label == "width").unwrap();
+        res.iter().find(|ci| ci.label == "y").unwrap();
+        res.iter().find(|ci| ci.label == "accessible-role").unwrap();
+        res.iter().find(|ci| ci.label == "opacity").unwrap();
+        // from Bar
+        res.iter().find(|ci| ci.label == "in_prop").unwrap();
+        res.iter().find(|ci| ci.label == "the-callback").unwrap();
+        // local
+        res.iter().find(|ci| ci.label == "local-prop").unwrap();
+        // no functions, no private stuff
+        assert_eq!(res.iter().find(|ci| ci.label == "out_prop"), None);
+        assert_eq!(res.iter().find(|ci| ci.label == "priv_prop"), None);
+        assert_eq!(res.iter().find(|ci| ci.label == "priv_prop1"), None);
+        assert_eq!(res.iter().find(|ci| ci.label == "priv_func"), None);
+        assert_eq!(res.iter().find(|ci| ci.label == "pub_func"), None);
+
+        // elements
+        let class = Some(CompletionItemKind::CLASS);
+        assert_eq!(res.iter().find(|ci| ci.label == "Bar").unwrap().kind, class);
+        assert_eq!(res.iter().find(|ci| ci.label == "Text").unwrap().kind, class);
+        assert_eq!(res.iter().find(|ci| ci.label == "Rectangle").unwrap().kind, class);
+        assert_eq!(res.iter().find(|ci| ci.label == "TouchArea").unwrap().kind, class);
+        assert_eq!(res.iter().find(|ci| ci.label == "VerticalLayout").unwrap().kind, class);
+    }
+
+    #[test]
+    fn dashes_and_underscores() {
+        let in_element = r#"
+            component Bar { in property <string> super_property-1; }
+            component Foo {
+                Bar {
+                    function nope() {}
+                    property<int> hello_world;
+                    pure callback with_underscores-and_dash();
+                    🔺
+                }
+            }
+        "#;
+        let in_expr1 = r#"
+        component Bar { property <string> nope; }
+        component Foo {
+            function hello_world() {}
+            Bar {
+                in property <string> super_property-1;
+                pure callback with_underscores-and_dash();
+                width: 🔺
+            }
+        }
+        "#;
+        let in_expr2 = r#"
+        component Bar { in property <string> super_property-1; }
+        component Foo {
+            property <int> nope;
+            Bar {
+                function hello_world() {}
+                pure callback with_underscores-and_dash();
+                width: self.🔺
+            }
+        }
+        "#;
+        for source in [in_element, in_expr1, in_expr2] {
+            let res = get_completions(source).unwrap();
+            assert!(!res.iter().any(|ci| ci.label == "nope"));
+            res.iter().find(|ci| ci.label == "with_underscores-and_dash").unwrap();
+            res.iter().find(|ci| ci.label == "super_property-1").unwrap();
+            res.iter().find(|ci| ci.label == "hello_world").unwrap();
         }
     }
 
@@ -864,7 +1147,7 @@ mod tests {
         "#;
         let res = get_completions(source).unwrap();
         res.iter().find(|ci| ci.label == "LineEdit").unwrap();
-        res.iter().find(|ci| ci.label == "StyleMetrics").unwrap();
+        res.iter().find(|ci| ci.label == "Palette").unwrap();
 
         let source = r#"
             import { Foo, 🔺} from "std-widgets.slint"
@@ -987,5 +1270,87 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(!res.is_empty());
         assert!(res.iter().all(|ci| ci.insert_text.is_none()));
+    }
+
+    #[test]
+    fn import_completed_component() {
+        let source = r#"
+            import { VerticalBox                 } from "std-widgets.slint";
+
+            export component Test {
+                VerticalBox {
+                    🔺
+                }
+            }
+
+        "#;
+        let res = get_completions(source).unwrap();
+        let about = res.iter().find(|ci| ci.label.starts_with("AboutSlint")).unwrap();
+
+        let additional_edits = about.additional_text_edits.as_ref().unwrap();
+        let edit = additional_edits.first().unwrap();
+
+        assert_eq!(edit.range.start.line, 1);
+        assert_eq!(edit.range.start.character, 32);
+        assert_eq!(edit.range.end.line, 1);
+        assert_eq!(edit.range.end.character, 32);
+        assert_eq!(edit.new_text, ", AboutSlint");
+    }
+
+    #[test]
+    fn inherits() {
+        let sources = [
+            "component Bar 🔺",
+            "component Bar in🔺",
+            "component Bar 🔺 {}",
+            "component Bar in🔺 Window {}",
+        ];
+        for source in sources {
+            eprintln!("Test for inherits in {source:?}");
+            let res = get_completions(source).unwrap();
+            res.iter().find(|ci| ci.label == "inherits").unwrap();
+        }
+
+        let sources = ["component 🔺", "component Bar {}🔺", "component Bar inherits 🔺 {}", "🔺"];
+        for source in sources {
+            let Some(res) = get_completions(source) else { continue };
+            assert!(
+                !res.iter().any(|ci| ci.label == "inherits"),
+                "completion for {source:?} contains 'inherits'"
+            );
+        }
+    }
+
+    #[test]
+    fn two_way_bindings() {
+        let sources = [
+            "component X { property<string> prop; elem := Text{} property foo <=> 🔺",
+            "component X { property<string> prop; elem := Text{} property<string> foo <=> e🔺; }",
+            "component X { property<string> prop; elem := Text{} prop <=> 🔺",
+            "component X { property<string> prop; elem := Text{} prop <=> e🔺; }",
+        ];
+        for source in sources {
+            eprintln!("Test for two ways in {source:?}");
+            let res = get_completions(source).unwrap();
+            res.iter().find(|ci| ci.label == "prop").unwrap();
+            res.iter().find(|ci| ci.label == "self").unwrap();
+            res.iter().find(|ci| ci.label == "root").unwrap();
+            res.iter().find(|ci| ci.label == "elem").unwrap();
+        }
+
+        let sources = [
+            "component X { elem := Text{ property<int> prop; } property foo <=> elem.🔺",
+            "component X { elem := Text{ property<int> prop; } property <string> foo <=> elem.t🔺",
+            "component X { elem := Text{ property<int> prop; } property foo <=> elem.🔺; }",
+            "component X { elem := Text{ property<string> prop; } title <=> elem.t🔺",
+            "component X { elem := Text{ property<string> prop; } title <=> elem.🔺; }",
+        ];
+        for source in sources {
+            eprintln!("Test for two ways in {source:?}");
+            let res = get_completions(source).unwrap();
+            res.iter().find(|ci| ci.label == "text").unwrap();
+            res.iter().find(|ci| ci.label == "prop").unwrap();
+            assert!(!res.iter().any(|ci| ci.label == "elem"));
+        }
     }
 }

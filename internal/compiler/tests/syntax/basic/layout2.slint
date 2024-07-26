@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 export X := Rectangle {
 
@@ -24,6 +24,11 @@ export X := Rectangle {
 
                 animate x { duration: 100ms; }
 //                      ^error{The property 'x' cannot be set for elements placed in a layout, because the layout is already setting it}
+
+                init => {
+                    self.colspan = 45;
+//                  ^error{The property must be known at compile time and cannot be changed at runtime}
+                }
             }
         }
         Row {

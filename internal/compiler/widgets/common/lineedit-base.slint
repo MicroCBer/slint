@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 export component LineEditBase inherits Rectangle {
     in-out property <string> placeholder-text;
@@ -19,6 +19,10 @@ export component LineEditBase inherits Rectangle {
 
     callback accepted( /* text */ string);
     callback edited(/* text */ string);
+
+    public function set-selection-offsets(start: int, end: int) {
+        i-text-input.set-selection-offsets(start, end);
+    }
 
     public function select-all() {
         i-text-input.select-all();
@@ -56,6 +60,8 @@ export component LineEditBase inherits Rectangle {
         font-family: i-text-input.font-family;
         color: root.placeholder-color;
         horizontal-alignment: root.horizontal-alignment;
+        // the label is set on the LineEdit itself
+        accessible-role: none;
     }
 
     i-text-input := TextInput {

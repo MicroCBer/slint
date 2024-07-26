@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore nesw
 
@@ -25,15 +25,15 @@ use crate::input::{
     FocusEvent, FocusEventResult, InputEventFilterResult, InputEventResult, KeyEventResult,
     KeyEventType, MouseEvent,
 };
-use crate::item_rendering::CachedRenderingData;
+use crate::item_rendering::{CachedRenderingData, RenderBorderRectangle};
 pub use crate::item_tree::ItemRc;
 use crate::layout::LayoutInfo;
 use crate::lengths::{
-    LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector, PointLengths, RectLengths,
+    LogicalBorderRadius, LogicalLength, LogicalPoint, LogicalRect, LogicalSize, LogicalVector,
+    PointLengths, RectLengths,
 };
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
-use crate::timers::Timer;
 use crate::window::{WindowAdapter, WindowAdapterRc, WindowInner};
 use crate::{Callback, Coord, Property, SharedString};
 use alloc::rc::Rc;
@@ -328,11 +328,111 @@ declare_item_vtable! {
 #[repr(C)]
 #[derive(FieldOffsets, Default, SlintElement)]
 #[pin]
+/// The implementation of the `BasicBorderRectangle` element
+pub struct BasicBorderRectangle {
+    pub background: Property<Brush>,
+    pub border_width: Property<LogicalLength>,
+    pub border_radius: Property<LogicalLength>,
+    pub border_color: Property<Brush>,
+    pub cached_rendering_data: CachedRenderingData,
+}
+
+impl Item for BasicBorderRectangle {
+    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
+
+    fn layout_info(
+        self: Pin<&Self>,
+        _orientation: Orientation,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+    ) -> LayoutInfo {
+        LayoutInfo { stretch: 1., ..LayoutInfo::default() }
+    }
+
+    fn input_event_filter_before_children(
+        self: Pin<&Self>,
+        _: MouseEvent,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
+    ) -> InputEventFilterResult {
+        InputEventFilterResult::ForwardAndIgnore
+    }
+
+    fn input_event(
+        self: Pin<&Self>,
+        _: MouseEvent,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
+    ) -> InputEventResult {
+        InputEventResult::EventIgnored
+    }
+
+    fn key_event(
+        self: Pin<&Self>,
+        _: &KeyEvent,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
+    ) -> KeyEventResult {
+        KeyEventResult::EventIgnored
+    }
+
+    fn focus_event(
+        self: Pin<&Self>,
+        _: &FocusEvent,
+        _window_adapter: &Rc<dyn WindowAdapter>,
+        _self_rc: &ItemRc,
+    ) -> FocusEventResult {
+        FocusEventResult::FocusIgnored
+    }
+
+    fn render(
+        self: Pin<&Self>,
+        backend: &mut ItemRendererRef,
+        self_rc: &ItemRc,
+        size: LogicalSize,
+    ) -> RenderingResult {
+        (*backend).draw_border_rectangle(self, self_rc, size, &self.cached_rendering_data);
+        RenderingResult::ContinueRenderingChildren
+    }
+}
+
+impl RenderBorderRectangle for BasicBorderRectangle {
+    fn background(self: Pin<&Self>) -> Brush {
+        self.background()
+    }
+    fn border_width(self: Pin<&Self>) -> LogicalLength {
+        self.border_width()
+    }
+    fn border_radius(self: Pin<&Self>) -> LogicalBorderRadius {
+        LogicalBorderRadius::from_length(self.border_radius())
+    }
+    fn border_color(self: Pin<&Self>) -> Brush {
+        self.border_color()
+    }
+}
+
+impl ItemConsts for BasicBorderRectangle {
+    const cached_rendering_data_offset: const_field_offset::FieldOffset<
+        BasicBorderRectangle,
+        CachedRenderingData,
+    > = BasicBorderRectangle::FIELD_OFFSETS.cached_rendering_data.as_unpinned_projection();
+}
+
+declare_item_vtable! {
+    fn slint_get_BasicBorderRectangleVTable() -> BasicBorderRectangleVTable for BasicBorderRectangle
+}
+
+#[repr(C)]
+#[derive(FieldOffsets, Default, SlintElement)]
+#[pin]
 /// The implementation of the `BorderRectangle` element
 pub struct BorderRectangle {
     pub background: Property<Brush>,
     pub border_width: Property<LogicalLength>,
     pub border_radius: Property<LogicalLength>,
+    pub border_top_left_radius: Property<LogicalLength>,
+    pub border_top_right_radius: Property<LogicalLength>,
+    pub border_bottom_left_radius: Property<LogicalLength>,
+    pub border_bottom_right_radius: Property<LogicalLength>,
     pub border_color: Property<Brush>,
     pub cached_rendering_data: CachedRenderingData,
 }
@@ -390,8 +490,28 @@ impl Item for BorderRectangle {
         self_rc: &ItemRc,
         size: LogicalSize,
     ) -> RenderingResult {
-        (*backend).draw_border_rectangle(self, self_rc, size);
+        (*backend).draw_border_rectangle(self, self_rc, size, &self.cached_rendering_data);
         RenderingResult::ContinueRenderingChildren
+    }
+}
+
+impl RenderBorderRectangle for BorderRectangle {
+    fn background(self: Pin<&Self>) -> Brush {
+        self.background()
+    }
+    fn border_width(self: Pin<&Self>) -> LogicalLength {
+        self.border_width()
+    }
+    fn border_radius(self: Pin<&Self>) -> LogicalBorderRadius {
+        LogicalBorderRadius::from_lengths(
+            self.border_top_left_radius(),
+            self.border_top_right_radius(),
+            self.border_bottom_right_radius(),
+            self.border_bottom_left_radius(),
+        )
+    }
+    fn border_color(self: Pin<&Self>) -> Brush {
+        self.border_color()
     }
 }
 
@@ -408,7 +528,7 @@ declare_item_vtable! {
 
 /// The implementation of the `TouchArea` element
 #[repr(C)]
-#[derive(FieldOffsets, Default, SlintElement)]
+#[derive(FieldOffsets, SlintElement, Default)]
 #[pin]
 pub struct TouchArea {
     pub enabled: Property<bool>,
@@ -433,43 +553,6 @@ pub struct TouchArea {
     pub cached_rendering_data: CachedRenderingData,
     /// true when we are currently grabbing the mouse
     grabbed: Cell<bool>,
-    clicked_timer: Timer,
-}
-
-impl TouchArea {
-    fn start_clicked_timer(self: Pin<&Self>, item_rc: &ItemRc) -> bool {
-        let Some(double_click_interval) =
-            crate::platform::PLATFORM_INSTANCE.with(|p| p.get().map(|p| p.click_interval()))
-        else {
-            return false;
-        };
-
-        let weak = item_rc.downgrade();
-
-        self.clicked_timer.start(
-            crate::timers::TimerMode::SingleShot,
-            double_click_interval,
-            move || {
-                let Some(item) = weak.upgrade() else {
-                    return;
-                };
-                let Some(touch_area) = item.downcast::<TouchArea>() else {
-                    return;
-                };
-                if Self::FIELD_OFFSETS.pressed.apply_pin(touch_area.as_pin_ref()).get() == false {
-                    Self::FIELD_OFFSETS.clicked.apply_pin(touch_area.as_pin_ref()).call(&());
-                }
-            },
-        );
-
-        true
-    }
-
-    fn stop_clicked_timer(self: Pin<&Self>) -> bool {
-        let result = self.clicked_timer.running();
-        self.clicked_timer.stop();
-        result
-    }
 }
 
 impl Item for TouchArea {
@@ -539,12 +622,6 @@ impl Item for TouchArea {
                 InputEventResult::GrabMouse
             }
             MouseEvent::Exit => {
-                if self.stop_clicked_timer()
-                    && Self::FIELD_OFFSETS.pressed.apply_pin(self).get() == false
-                {
-                    Self::FIELD_OFFSETS.clicked.apply_pin(self).call(&());
-                }
-
                 Self::FIELD_OFFSETS.pressed.apply_pin(self).set(false);
                 if self.grabbed.replace(false) {
                     Self::FIELD_OFFSETS.pointer_event.apply_pin(self).call(&(PointerEvent {
@@ -557,28 +634,15 @@ impl Item for TouchArea {
                 InputEventResult::EventAccepted
             }
 
-            MouseEvent::Released { button, position, .. } => {
+            MouseEvent::Released { button, position, click_count } => {
                 let geometry = self_rc.geometry();
-                let double_clicked_set =
-                    Self::FIELD_OFFSETS.double_clicked.apply_pin(self).has_handler();
-                let timer_was_running = self.stop_clicked_timer();
-
                 if button == PointerEventButton::Left
                     && LogicalRect::new(LogicalPoint::default(), geometry.size).contains(position)
                     && self.pressed()
                 {
-                    match (timer_was_running, double_clicked_set) {
-                        (true, true) => {
-                            Self::FIELD_OFFSETS.double_clicked.apply_pin(self).call(&())
-                        }
-                        (false, true) => {
-                            if !self.start_clicked_timer(self_rc) {
-                                Self::FIELD_OFFSETS.clicked.apply_pin(self).call(&());
-                            }
-                        }
-                        (true, false) => { /* nothing to do: The double-click handler was removed! */
-                        }
-                        (false, false) => Self::FIELD_OFFSETS.clicked.apply_pin(self).call(&()),
+                    Self::FIELD_OFFSETS.clicked.apply_pin(self).call(&());
+                    if (click_count % 2) == 1 {
+                        Self::FIELD_OFFSETS.double_clicked.apply_pin(self).call(&())
                     }
                 }
 
@@ -595,12 +659,17 @@ impl Item for TouchArea {
                 InputEventResult::EventAccepted
             }
             MouseEvent::Moved { .. } => {
-                if self.grabbed.get() {
+                Self::FIELD_OFFSETS.pointer_event.apply_pin(self).call(&(PointerEvent {
+                    button: PointerEventButton::Other,
+                    kind: PointerEventKind::Move,
+                    modifiers: window_adapter.window().0.modifiers.get().into(),
+                },));
+                return if self.grabbed.get() {
                     Self::FIELD_OFFSETS.moved.apply_pin(self).call(&());
                     InputEventResult::GrabMouse
                 } else {
                     InputEventResult::EventAccepted
-                }
+                };
             }
             MouseEvent::Wheel { delta_x, delta_y, .. } => {
                 let modifiers = window_adapter.window().0.modifiers.get().into();
@@ -706,7 +775,7 @@ impl Item for FocusScope {
         self_rc: &ItemRc,
     ) -> InputEventResult {
         if self.enabled() && matches!(event, MouseEvent::Pressed { .. }) && !self.has_focus() {
-            WindowInner::from_pub(window_adapter.window()).set_focus_item(self_rc);
+            WindowInner::from_pub(window_adapter.window()).set_focus_item(self_rc, true);
             InputEventResult::EventAccepted
         } else {
             InputEventResult::EventIgnored
@@ -785,7 +854,10 @@ declare_item_vtable! {
 #[pin]
 /// The implementation of the `Clip` element
 pub struct Clip {
-    pub border_radius: Property<LogicalLength>,
+    pub border_top_left_radius: Property<LogicalLength>,
+    pub border_top_right_radius: Property<LogicalLength>,
+    pub border_bottom_left_radius: Property<LogicalLength>,
+    pub border_bottom_right_radius: Property<LogicalLength>,
     pub border_width: Property<LogicalLength>,
     pub cached_rendering_data: CachedRenderingData,
     pub clip: Property<bool>,
@@ -856,6 +928,17 @@ impl Item for Clip {
         size: LogicalSize,
     ) -> RenderingResult {
         (*backend).visit_clip(self, self_rc, size)
+    }
+}
+
+impl Clip {
+    pub fn logical_border_radius(self: Pin<&Self>) -> LogicalBorderRadius {
+        LogicalBorderRadius::from_lengths(
+            self.border_top_left_radius(),
+            self.border_top_right_radius(),
+            self.border_bottom_right_radius(),
+            self.border_bottom_left_radius(),
+        )
     }
 }
 
@@ -1171,6 +1254,7 @@ pub struct WindowItem {
     pub background: Property<Brush>,
     pub title: Property<SharedString>,
     pub no_frame: Property<bool>,
+    pub resize_border_width: Property<LogicalLength>,
     pub always_on_top: Property<bool>,
     pub icon: Property<crate::graphics::Image>,
     pub default_font_family: Property<SharedString>,
@@ -1360,7 +1444,11 @@ declare_item_vtable! {
 }
 
 declare_item_vtable! {
-    fn slint_get_TextVTable() -> TextVTable for Text
+    fn slint_get_ComplexTextVTable() -> ComplexTextVTable for ComplexText
+}
+
+declare_item_vtable! {
+    fn slint_get_SimpleTextVTable() -> SimpleTextVTable for SimpleText
 }
 
 declare_item_vtable! {

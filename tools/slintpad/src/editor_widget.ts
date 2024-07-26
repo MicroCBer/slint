@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore codingame lumino mimetypes printerdemo
 
@@ -23,17 +23,16 @@ import { MonacoLanguageClient } from "monaco-languageclient";
 import { createConfiguredEditor } from "vscode/monaco";
 
 import { initialize as initializeMonacoServices } from "vscode/services";
-import { initialize as initializeVscodeExtensions } from "vscode/extensions";
 import getConfigurationServiceOverride from "@codingame/monaco-vscode-configuration-service-override";
 import getEditorServiceOverride, {
     IReference,
     IEditorOptions,
     IResolvedTextEditorModel,
 } from "@codingame/monaco-vscode-editor-service-override";
-import getLanguagesServiceOverride from "@codingame/monaco-vscode-languages-service-override";
-import getModelServiceOverride from "@codingame/monaco-vscode-model-service-override";
 import getSnippetServiceOverride from "@codingame/monaco-vscode-snippets-service-override";
 import getStorageServiceOverride from "@codingame/monaco-vscode-storage-service-override";
+
+import "vscode/localExtensionHost";
 
 function openEditor(
     _modelRef: IReference<IResolvedTextEditorModel>,
@@ -50,14 +49,10 @@ export function initialize(): Promise<void> {
             initializeMonacoServices({
                 ...getConfigurationServiceOverride(monaco.Uri.file("/tmp")),
                 ...getEditorServiceOverride(openEditor),
-                ...getLanguagesServiceOverride(),
-                ...getModelServiceOverride(),
                 ...getSnippetServiceOverride(),
                 ...getStorageServiceOverride(),
             }).then(() => {
-                initializeVscodeExtensions().then(() => {
-                    resolve();
-                });
+                resolve();
             });
         } catch (e) {
             reject(e);
@@ -252,6 +247,11 @@ class EditorPaneWidget extends Widget {
         monaco.editor.onDidCreateModel((model: monaco.editor.ITextModel) =>
             this.add_model_listener(model),
         );
+
+        lsp.show_document_callback = (uri, position) => {
+            this.goto_position(uri, position);
+            return true;
+        };
     }
 
     async map_url(url_: string): Promise<string | undefined> {
@@ -388,8 +388,9 @@ class EditorPaneWidget extends Widget {
 
     private resize_editor() {
         if (this.#editor != null) {
-            const width = this.contentNode.offsetWidth;
-            const height = this.contentNode.offsetHeight;
+            // This has a 1px wide border all around, so subtract 2px...
+            const width = this.contentNode.offsetWidth - 2;
+            const height = this.contentNode.offsetHeight - 2;
             this.#editor.layout({ width, height });
         }
     }
@@ -463,7 +464,7 @@ class EditorPaneWidget extends Widget {
             language: "slint",
             glyphMargin: true,
             lightbulb: {
-                enabled: true,
+                enabled: monaco.editor.ShowLightbulbIconMode.On,
             },
         });
 

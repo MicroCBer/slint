@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // Test that the Slint event loop processes libuv's events.
 
@@ -57,7 +57,7 @@ test.serial('merged event loops with networking', async (t) => {
     t.is(received_response, "Hello World");
 })
 
-test.serial('quit event loop on last window closed', async (t) => {
+test.serial('quit event loop on last window closed with callback', async (t) => {
     let compiler = new private_api.ComponentCompiler;
     let definition = compiler.buildFromSource(`
 
@@ -65,16 +65,17 @@ test.serial('quit event loop on last window closed', async (t) => {
         width: 300px;
         height: 300px;
     }`, "");
-    t.not(definition, null);
+    t.not(definition.App, null);
 
-    let instance = definition!.create() as any;
+    let instance = definition.App!.create() as any;
     t.not(instance, null);
 
     instance.window().show();
-    await runEventLoop(() => {
-        setTimeout(() => {
-            instance.window().hide();
-        }, 2);
-    });
+    await runEventLoop(
+         () => {
+            setTimeout(() => {
+                instance.window().hide();
+            }, 2);
 
+    });
 })

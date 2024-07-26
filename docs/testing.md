@@ -8,7 +8,7 @@ This documents describe the testing infrastructure of Slint
 The syntax tests are testing that the compiler show the right error messages in case of error.
 
 The syntax tests are located in `slint_compiler/tests/syntax/` and it's driven by the
-[`syntax_tests.rs`](../slint_compiler/tests/syntax_tests.rs) file. More info in the comments of that file.
+[`syntax_tests.rs`](../internal/compiler/tests/syntax_tests.rs) file. More info in the comments of that file.
 
 In summary, each .slint files have comments with `^error` like so:
 
@@ -97,10 +97,9 @@ Note that there are also C++ unit tests that can be run by CMake
 This is used to test the NodeJS API. It takes the ```` ```js ```` blocks in comment and make .js file
 with it that loads the .slint and runs node with it.
 Each test is run in a different node process.
-You need to build the node integration before running the tests, even if the change was on the compiler
 
 ```
-cargo  build -p slint-node  && cargo  test -p test-driver-nodejs
+cargo  test -p test-driver-nodejs
 ```
 
 ## Screenshot tests

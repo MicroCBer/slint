@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! This pass converts the verbose markup used for paths, such as
 //!    Path {
@@ -147,7 +147,7 @@ fn compile_path_from_string_literal(
             ("y".to_owned(), Type::Float32),
         ])
         .collect(),
-        name: Some("Point".into()),
+        name: Some("slint::private_api::Point".into()),
         node: None,
         rust_attributes: None,
     };

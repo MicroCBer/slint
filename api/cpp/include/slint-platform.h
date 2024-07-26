@@ -1,12 +1,14 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #pragma once
 
 #include "slint.h"
 
 #include <cassert>
+#include <cstdint>
 #include <utility>
+#include <ranges>
 
 struct xcb_connection_t;
 struct wl_surface;
@@ -243,6 +245,30 @@ public:
             return out;
         }
 
+        /// \deprecated Use is_fullscreen() instead
+        [[deprecated("Renamed is_fullscreen()")]] bool fullscreen() const
+        {
+            return is_fullscreen();
+        }
+
+        /// Returns true if the window should be shown fullscreen; false otherwise.
+        bool is_fullscreen() const
+        {
+            return cbindgen_private::slint_window_properties_get_fullscreen(inner());
+        }
+
+        /// Returns true if the window should be minimized; false otherwise
+        bool is_minimized() const
+        {
+            return cbindgen_private::slint_window_properties_get_minimized(inner());
+        }
+
+        /// Returns true if the window should be maximized; false otherwise
+        bool is_maximized() const
+        {
+            return cbindgen_private::slint_window_properties_get_maximized(inner());
+        }
+
         /// This struct describes the layout constraints of a window.
         ///
         /// It is the return value of WindowProperties::layout_constraints().
@@ -366,10 +392,7 @@ public:
     /// Returns a copy of text stored in the system clipboard, if any.
     ///
     /// If the platform doesn't support the specified clipboard, the function should return nullopt
-    virtual std::optional<SharedString> clipboard_text(Clipboard)
-    {
-        return {};
-    }
+    virtual std::optional<SharedString> clipboard_text(Clipboard) { return {}; }
 
     /// Spins an event loop and renders the visible windows.
     virtual void run_event_loop() { }
@@ -539,18 +562,82 @@ public:
         /// Returns the size of the bounding box of this region.
         PhysicalSize bounding_box_size() const
         {
-            return PhysicalSize({ uint32_t(inner.width), uint32_t(inner.height) });
+            if (inner.count == 0) {
+                return PhysicalSize();
+            }
+            auto origin = bounding_box_origin();
+            PhysicalSize size({ .width = uint32_t(inner.rectangles[0].max.x - origin.x),
+                                .height = uint32_t(inner.rectangles[0].max.y - origin.y) });
+            for (size_t i = 1; i < inner.count; ++i) {
+                size.width = std::max(size.width, uint32_t(inner.rectangles[i].max.x - origin.x));
+                size.height = std::max(size.height, uint32_t(inner.rectangles[i].max.y - origin.y));
+            }
+            return size;
         }
         /// Returns the origin of the bounding box of this region.
         PhysicalPosition bounding_box_origin() const
         {
-            return PhysicalPosition({ inner.x, inner.y });
+            if (inner.count == 0) {
+                return PhysicalPosition();
+            }
+            PhysicalPosition origin(
+                    { .x = inner.rectangles[0].min.x, .y = inner.rectangles[0].min.y });
+            for (size_t i = 1; i < inner.count; ++i) {
+                origin.x = std::min<int>(origin.x, inner.rectangles[i].min.x);
+                origin.y = std::min<int>(origin.y, inner.rectangles[i].min.y);
+            }
+            return origin;
         }
 
+        /// Returns a view on all the rectangles in this region.
+        /// The rectangles do not overlap.
+        /// The returned type is a C++ view over PhysicalRegion::Rect structs.
+        ///
+        /// It can be used like so:
+        /// ```cpp
+        /// for (auto [origin, size] : region.rectangles()) {
+        ///     // Do something with the rect
+        /// }
+        /// ```
+        auto rectangles() const
+        {
+            SharedVector<cbindgen_private::IntRect> rectangles;
+            slint_software_renderer_region_to_rects(&inner, &rectangles);
+#    if __cpp_lib_ranges >= 202110L // DR20 P2415R2
+            using std::ranges::owning_view;
+#    else
+            struct owning_view : std::ranges::view_interface<owning_view>
+            {
+                SharedVector<cbindgen_private::IntRect> rectangles;
+                owning_view(SharedVector<cbindgen_private::IntRect> &&rectangles)
+                    : rectangles(rectangles)
+                {
+                }
+                auto begin() const { return rectangles.begin(); }
+                auto end() const { return rectangles.end(); }
+            };
+#    endif
+            return owning_view(std::move(rectangles)) | std::views::transform([](const auto &r) {
+                       return Rect { .origin = PhysicalPosition({ .x = r.x, .y = r.y }),
+                                     .size = PhysicalSize({ .width = uint32_t(r.width),
+                                                            .height = uint32_t(r.height) }) };
+                   });
+        }
+
+        /// A Rectangle defined with an origin and a size.
+        /// The PhysicalRegion::rectangles() function returns a view over them
+        struct Rect
+        {
+            /// The origin of the rectangle.
+            PhysicalPosition origin;
+            /// The size of the rectangle.
+            PhysicalSize size;
+        };
+
     private:
-        cbindgen_private::types::IntRect inner;
+        cbindgen_private::PhysicalRegion inner;
         friend class SoftwareRenderer;
-        PhysicalRegion(cbindgen_private::types::IntRect inner) : inner(inner) { }
+        PhysicalRegion(cbindgen_private::PhysicalRegion inner) : inner(std::move(inner)) { }
     };
 
     /// This enum describes which parts of the buffer passed to the SoftwareRenderer may be
@@ -607,9 +694,47 @@ public:
     }
 
 #    ifdef SLINT_FEATURE_EXPERIMENTAL
+    /// Render the window scene, line by line. The provided Callback will be invoked for each line
+    /// that needs to rendered.
+    ///
+    /// The renderer uses a cache internally and will only render the part of the window
+    /// which are dirty.
+    ///
+    /// This function returns the physical region that was rendered considering the rotation.
+    ///
+    /// The callback must be an invocable with the signature (size_t line, size_t begin, size_t end,
+    /// auto render_fn). It is invoked with the line number as first parameter, and the start x and
+    /// end x coordinates of the line as second and third parameter. The implementation must provide
+    /// a line buffer (as std::span) and invoke the provided fourth parameter (render_fn) with it,
+    /// to fill it with pixels. After the line buffer is filled with pixels, your implementation is
+    /// free to flush that line to the screen for display.
+    template<typename Callback>
+        requires requires(Callback callback) {
+            callback(size_t(0), size_t(0), size_t(0), [&callback](std::span<Rgb565Pixel>) {});
+        }
+    PhysicalRegion render_by_line(Callback process_line_callback) const
+    {
+        auto r = cbindgen_private::slint_software_renderer_render_by_line_rgb565(
+                inner,
+                [](void *process_line_callback_ptr, uintptr_t line, uintptr_t line_start,
+                   uintptr_t line_end, void (*render_fn)(const void *, uint16_t *, std::size_t),
+                   const void *render_fn_data) {
+                    (*reinterpret_cast<Callback *>(process_line_callback_ptr))(
+                            std::size_t(line), std::size_t(line_start), std::size_t(line_end),
+                            [render_fn, render_fn_data](std::span<Rgb565Pixel> line_span) {
+                                render_fn(render_fn_data,
+                                          reinterpret_cast<uint16_t *>(line_span.data()),
+                                          line_span.size());
+                            });
+                },
+                &process_line_callback);
+        return PhysicalRegion { r };
+    }
+#    endif
+
     /// This enum describes the rotation that is applied to the buffer when rendering.
-    /// To be used in set_window_rotation()
-    enum class WindowRotation {
+    /// To be used in set_rendering_rotation()
+    enum class RenderingRotation {
         /// No rotation
         NoRotation = 0,
         /// Rotate 90° to the left
@@ -623,12 +748,11 @@ public:
     /// Set how the window need to be rotated in the buffer.
     ///
     /// This is typically used to implement screen rotation in software
-    void set_window_rotation(WindowRotation rotation)
+    void set_rendering_rotation(RenderingRotation rotation)
     {
-        cbindgen_private::slint_software_renderer_set_window_rotation(inner,
-                                                                      static_cast<int>(rotation));
+        cbindgen_private::slint_software_renderer_set_rendering_rotation(
+                inner, static_cast<int>(rotation));
     }
-#    endif
 };
 #endif
 

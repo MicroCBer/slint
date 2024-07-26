@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
  This module enable runtime type information for the builtin items and
@@ -11,6 +11,7 @@
 pub type FieldOffset<T, U> = const_field_offset::FieldOffset<T, U, const_field_offset::AllowPin>;
 use crate::items::PropertyAnimation;
 use alloc::rc::Rc;
+#[cfg(not(feature = "std"))]
 use core::convert::{TryFrom, TryInto};
 use core::pin::Pin;
 
@@ -194,15 +195,14 @@ where
         animation: AnimatedBindingKind,
     ) -> Result<(), ()> {
         // Put in a function that does not depends on Item to avoid code bloat
-        fn set_binding_impl<T: Clone + 'static, Value: 'static>(
+        fn set_binding_impl<T, Value>(
             p: Pin<&crate::Property<T>>,
             binding: Box<dyn Fn() -> Value>,
             animation: AnimatedBindingKind,
         ) -> Result<(), ()>
         where
-            Value: TryInto<T>,
-            T: TryInto<Value>,
-            T: crate::properties::InterpolatedPropertyValue,
+            T: Clone + TryInto<Value> + crate::properties::InterpolatedPropertyValue + 'static,
+            Value: TryInto<T> + 'static,
         {
             match animation {
                 AnimatedBindingKind::NotAnimated => {

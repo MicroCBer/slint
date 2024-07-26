@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This module contains a cache helper for caching box shadow textures.
@@ -7,7 +7,6 @@ This module contains a cache helper for caching box shadow textures.
 
 use std::{cell::RefCell, collections::BTreeMap};
 
-use super::euclid;
 use crate::items::ItemRc;
 use crate::lengths::RectLengths;
 use crate::{

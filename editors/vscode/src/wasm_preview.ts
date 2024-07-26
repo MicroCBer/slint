@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { Uri } from "vscode";
 
@@ -89,6 +89,7 @@ function getPreviewHtml(
     slint_wasm_preview_url: Uri,
     default_style: string,
 ): string {
+    const experimental = typeof process !== 'undefined' && process.env.hasOwnProperty("SLINT_ENABLE_EXPERIMENTAL_FEATURES");
     const result = `<!DOCTYPE html>
 <html lang="en" style="height: 100%; width: 100%;">
 <head>
@@ -143,6 +144,7 @@ function getPreviewHtml(
             vscode.postMessage({ command: "map_url", url: url });
         })},
         "${default_style}",
+        ${experimental ? "true" : "false"}
     );
 
     window.addEventListener('message', async message => {
@@ -164,7 +166,11 @@ function getPreviewHtml(
         }
     });
 
-    preview_connector.show_ui().then(() => vscode.postMessage({ command: 'preview_ready' }));
+    preview_connector.show_ui().then(() => {
+        canvas.style.width = "100%";
+        canvas.style.height = "100%";
+        vscode.postMessage({ command: 'preview_ready' });
+    });
 
     </script>
 </head>
@@ -196,7 +202,7 @@ function map_url(webview: vscode.Webview, url_: string) {
 
     try {
         const url = Uri.parse(url_, false);
-        if (vscode.workspace.getWorkspaceFolder(url) && url.scheme === "file") {
+        if (vscode.workspace.getWorkspaceFolder(url)) {
             result = previewPanel?.webview.asWebviewUri(url)?.toString();
         }
     } catch (_) {

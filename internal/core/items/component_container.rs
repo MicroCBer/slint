@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This module contains the builtin `ComponentContainer` and related items
@@ -22,6 +22,7 @@ use crate::properties::{Property, PropertyTracker};
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
 use crate::window::WindowAdapter;
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use const_field_offset::FieldOffsets;
@@ -124,10 +125,7 @@ impl ComponentContainer {
     }
 
     pub fn subtree_component(self: Pin<&Self>) -> ItemTreeWeak {
-        self.item_tree
-            .borrow()
-            .as_ref()
-            .map_or(ItemTreeWeak::default(), |rc| vtable::VRc::downgrade(rc))
+        self.item_tree.borrow().as_ref().map_or(ItemTreeWeak::default(), vtable::VRc::downgrade)
     }
 
     pub fn visit_children_item(

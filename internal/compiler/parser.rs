@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*! The Slint Language Parser
 
@@ -12,9 +12,9 @@ This module has different sub modules with the actual parser functions
 
 */
 
-use crate::diagnostics::{BuildDiagnostics, SourceFile, Spanned};
+use crate::diagnostics::{BuildDiagnostics, SourceFile, SourceFileVersion, Spanned};
 pub use smol_str::SmolStr;
-use std::{convert::TryFrom, fmt::Display};
+use std::fmt::Display;
 
 mod document;
 mod element;
@@ -118,29 +118,32 @@ macro_rules! node_accessors {
     };
     (@ 2 $kind:ident) => {
         #[allow(non_snake_case)]
+        #[track_caller]
         pub fn $kind(&self) -> ($kind, $kind) {
             let mut it = self.0.children().filter(|n| n.kind() == SyntaxKind::$kind);
-            let a = it.next().unwrap();
-            let b = it.next().unwrap();
-            debug_assert!(it.next().is_none());
+            let a = it.next().expect(stringify!("Missing first ", $kind));
+            let b = it.next().expect(stringify!("Missing second ", $kind));
+            debug_assert!(it.next().is_none(), stringify!("More ", $kind, " than expected"));
             (a.into(), b.into())
         }
     };
     (@ 3 $kind:ident) => {
         #[allow(non_snake_case)]
+        #[track_caller]
         pub fn $kind(&self) -> ($kind, $kind, $kind) {
             let mut it = self.0.children().filter(|n| n.kind() == SyntaxKind::$kind);
-            let a = it.next().unwrap();
-            let b = it.next().unwrap();
-            let c = it.next().unwrap();
-            debug_assert!(it.next().is_none());
+            let a = it.next().expect(stringify!("Missing first ", $kind));
+            let b = it.next().expect(stringify!("Missing second ", $kind));
+            let c = it.next().expect(stringify!("Missing third ", $kind));
+            debug_assert!(it.next().is_none(), stringify!("More ", $kind, " than expected"));
             (a.into(), b.into(), c.into())
         }
     };
     (@ $kind:ident) => {
         #[allow(non_snake_case)]
+        #[track_caller]
         pub fn $kind(&self) -> $kind {
-            self.0.child_node(SyntaxKind::$kind).unwrap().into()
+            self.0.child_node(SyntaxKind::$kind).expect(stringify!("Missing ", $kind)).into()
         }
     };
 
@@ -240,6 +243,7 @@ macro_rules! declare_syntax {
                 #[cfg(test)]
                 impl SyntaxNodeVerify for $nodekind {
                     const KIND: SyntaxKind = SyntaxKind::$nodekind;
+                    #[track_caller]
                     fn verify(node: SyntaxNode) {
                         assert_eq!(node.kind(), Self::KIND);
                         verify_node!(node, $children);
@@ -255,8 +259,9 @@ macro_rules! declare_syntax {
                 }
 
                 impl From<SyntaxNode> for $nodekind {
+                    #[track_caller]
                     fn from(node: SyntaxNode) -> Self {
-                        debug_assert_eq!(node.kind(), SyntaxKind::$nodekind);
+                        assert_eq!(node.kind(), SyntaxKind::$nodekind);
                         Self(node)
                     }
                 }
@@ -332,7 +337,8 @@ declare_syntax! {
         /// `id := Element { ... }`
         SubElement -> [ Element ],
         Element -> [ ?QualifiedName, *PropertyDeclaration, *Binding, *CallbackConnection,
-                     *CallbackDeclaration, *Function, *SubElement, *RepeatedElement, *PropertyAnimation,
+                     *CallbackDeclaration, *ConditionalElement, *Function, *SubElement,
+                     *RepeatedElement, *PropertyAnimation, *PropertyChangedCallback,
                      *TwoWayBinding, *States, *Transitions, ?ChildrenPlaceholder ],
         RepeatedElement -> [ ?DeclaredIdentifier, ?RepeatedIndex, Expression , SubElement],
         RepeatedIndex -> [],
@@ -347,6 +353,8 @@ declare_syntax! {
         PropertyDeclaration-> [ ?Type , DeclaredIdentifier, ?BindingExpression, ?TwoWayBinding ],
         /// QualifiedName are the properties name
         PropertyAnimation-> [ *QualifiedName, *Binding ],
+        /// `changed xxx => {...}`  where `xxx` is the DeclaredIdentifier
+        PropertyChangedCallback-> [ DeclaredIdentifier, CodeBlock ],
         /// wraps Identifiers, like `Rectangle` or `SomeModule.SomeType`
         QualifiedName-> [],
         /// Wraps single identifier (to disambiguate when there are other identifier in the production)
@@ -408,13 +416,13 @@ declare_syntax! {
         /// There is an identifier "in" or "out", the DeclaredIdentifier is the state name
         Transition -> [?DeclaredIdentifier, *PropertyAnimation],
         /// Export a set of declared components by name
-        ExportsList -> [ *ExportSpecifier, ?Component, *StructDeclaration, *ExportModule, *EnumDeclaration ],
+        ExportsList -> [ *ExportSpecifier, ?Component, *StructDeclaration, ?ExportModule, *EnumDeclaration ],
         /// Declare the first identifier to be exported, either under its name or instead
         /// under the name of the second identifier.
         ExportSpecifier -> [ ExportIdentifier, ?ExportName ],
         ExportIdentifier -> [],
         ExportName -> [],
-        /// `export * from "foo"`. The import uri is stored as string literal.
+        /// `export ... from "foo"`. The import uri is stored as string literal.
         ExportModule -> [],
         /// import { foo, bar, baz } from "blah"; The import uri is stored as string literal.
         ImportSpecifier -> [ ?ImportIdentifierList ],
@@ -549,11 +557,24 @@ mod parser_trait {
 
         /// consume everything until reaching a token of this kind
         fn until(&mut self, kind: SyntaxKind) {
-            // FIXME! match {} () []
-            while {
-                let k = self.nth(0).kind();
-                k != kind && k != SyntaxKind::Eof
-            } {
+            let mut parens = 0;
+            let mut braces = 0;
+            let mut brackets = 0;
+            loop {
+                match self.nth(0).kind() {
+                    k if k == kind && parens == 0 && braces == 0 && brackets == 0 => break,
+                    SyntaxKind::Eof => break,
+                    SyntaxKind::LParent => parens += 1,
+                    SyntaxKind::LBrace => braces += 1,
+                    SyntaxKind::LBracket => brackets += 1,
+                    SyntaxKind::RParent if parens == 0 => break,
+                    SyntaxKind::RParent => parens -= 1,
+                    SyntaxKind::RBrace if braces == 0 => break,
+                    SyntaxKind::RBrace => braces -= 1,
+                    SyntaxKind::RBracket if brackets == 0 => break,
+                    SyntaxKind::RBracket => brackets -= 1,
+                    _ => {}
+                };
                 self.consume();
             }
             self.expect(kind);
@@ -964,7 +985,7 @@ pub fn parse_expression_as_bindingexpression(
         };
         let node = rowan::SyntaxNode::new_root(p.builder.finish());
 
-        if !build_diagnostics.has_error() && token.kind() != SyntaxKind::Eof {
+        if !build_diagnostics.has_errors() && token.kind() != SyntaxKind::Eof {
             build_diagnostics.push_error_with_span(
                 format!("Expected end of string, found \"{}\"", &token.kind()),
                 crate::diagnostics::SourceLocation {
@@ -987,12 +1008,14 @@ pub fn parse_expression_as_bindingexpression(
 pub fn parse(
     source: String,
     path: Option<&std::path::Path>,
+    version: SourceFileVersion,
     build_diagnostics: &mut BuildDiagnostics,
 ) -> SyntaxNode {
     let mut p = DefaultParser::new(&source, build_diagnostics);
     p.source_file = std::rc::Rc::new(crate::diagnostics::SourceFileInner::new(
-        path.map(|p| crate::pathutils::clean_path(p)).unwrap_or_default(),
+        path.map(crate::pathutils::clean_path).unwrap_or_default(),
         source,
+        version,
     ));
     document::parse_document(&mut p);
     SyntaxNode {
@@ -1009,7 +1032,7 @@ pub fn parse_file<P: AsRef<std::path::Path>>(
     let source = crate::diagnostics::load_from_path(&path)
         .map_err(|d| build_diagnostics.push_internal_error(d))
         .ok()?;
-    Some(parse(source, Some(path.as_ref()), build_diagnostics))
+    Some(parse(source, Some(path.as_ref()), None, build_diagnostics))
 }
 
 pub fn parse_tokens(

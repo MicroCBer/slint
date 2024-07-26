@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 export Hello := Rectangle {
 
@@ -66,5 +66,30 @@ export Hello := Rectangle {
     for pp[idx] in [{a: 1, b: "P"},{a: 2, c: 1}]: Text {
         text: pp.b; // Ok! pp will have a, b and c properties, and b will be the empty string.
     }
+
+    // issue 4683
+    if issue_4683.shown : issue_4683 := TouchArea {
+    // ^error{Cannot access id 'issue_4683'}
+        property <bool> shown: true;
+        clicked => { shown = !shown; }
+    }
+
+    for xx in inner_for.model: inner_for := Rectangle {
+    //        ^error{Cannot access id 'inner_for'}
+        property <[int]> model: [1,2,3,4];
+    }
+
+    for xx in inner_model: Rectangle {
+//            ^error{Unknown unqualified identifier 'inner_model'}
+        property <[int]> inner_model: [1,2,3,4];
+    }
+
+    if element_inside_if.pressed : Rectangle {
+    // ^error{Cannot access id 'element_inside_if'}
+        element_inside_if := TouchArea {}
+    }
+
+    if self.pressed : TouchArea { }
+    //      ^error{Element 'Rectangle' does not have a property 'pressed'}
 
 }

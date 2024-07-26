@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This crate serves as a companion crate of the slint crate.
@@ -17,11 +17,11 @@ In your Cargo.toml:
 build = "build.rs"
 
 [dependencies]
-slint = "1.3.0"
+slint = "1.7.0"
 ...
 
 [build-dependencies]
-slint-build = "1.3.0"
+slint-build = "1.7.0"
 ```
 
 In the `build.rs` file:
@@ -52,7 +52,7 @@ compile_error!(
 
 use std::collections::HashMap;
 use std::env;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use i_slint_compiler::diagnostics::BuildDiagnostics;
@@ -185,12 +185,14 @@ struct CodeFormatter<Sink> {
     in_string: bool,
     /// number of bytes after the last `'`, 0 if there was none
     in_char: usize,
+    /// In string or char, and the previous character was `\\`
+    escaped: bool,
     sink: Sink,
 }
 
 impl<Sink> CodeFormatter<Sink> {
     pub fn new(sink: Sink) -> Self {
-        Self { indentation: 0, in_string: false, in_char: 0, sink }
+        Self { indentation: 0, in_string: false, in_char: 0, escaped: false, sink }
     }
 }
 
@@ -209,31 +211,41 @@ impl<Sink: Write> Write for CodeFormatter<Sink> {
             b';' if !self.in_string && self.in_char == 0 => true,
             b'"' if !self.in_string && self.in_char == 0 => {
                 self.in_string = true;
+                self.escaped = false;
                 false
             }
-            b'"' if self.in_string => {
-                // FIXME! escape character
+            b'"' if self.in_string && !self.escaped => {
                 self.in_string = false;
                 false
             }
             b'\'' if !self.in_string && self.in_char == 0 => {
                 self.in_char = 1;
+                self.escaped = false;
                 false
             }
-            b'\'' if !self.in_string && self.in_char > 0 => {
+            b'\'' if !self.in_string && self.in_char > 0 && !self.escaped => {
                 self.in_char = 0;
                 false
             }
-            b' ' | b'>' if self.in_char > 2 => {
+            b' ' | b'>' if self.in_char > 2 && !self.escaped => {
                 // probably a lifetime
                 self.in_char = 0;
                 false
             }
-            _ if self.in_char > 0 => {
-                self.in_char += 1;
+            b'\\' if (self.in_string || self.in_char > 0) && !self.escaped => {
+                self.escaped = true;
+                // no need to increment in_char since \ isn't a single character
                 false
             }
-            _ => false,
+            _ if self.in_char > 0 => {
+                self.in_char += 1;
+                self.escaped = false;
+                false
+            }
+            _ => {
+                self.escaped = false;
+                false
+            }
         }) {
             let idx = idx + 1;
             self.sink.write_all(&s[..idx])?;
@@ -277,6 +289,31 @@ fn formatter_test() {
         r#"fn xx<'lt>(foo: &'lt str) {
      println!("{}", '\u{f700}');
      return Ok(());
+     }
+"#
+    );
+
+    assert_eq!(
+        format_code(r#"fn main() { ""; "'"; "\""; "{}"; "\\"; "\\\""; }"#),
+        r#"fn main() {
+     "";
+     "'";
+     "\"";
+     "{}";
+     "\\";
+     "\\\"";
+     }
+"#
+    );
+
+    assert_eq!(
+        format_code(r#"fn main() { '"'; '\''; '{'; '}'; '\\'; }"#),
+        r#"fn main() {
+     '"';
+     '\'';
+     '{';
+     '}';
+     '\\';
      }
 "#
     );
@@ -325,7 +362,7 @@ pub fn compile_with_config(
     let mut diag = BuildDiagnostics::default();
     let syntax_node = i_slint_compiler::parser::parse_file(&path, &mut diag);
 
-    if diag.has_error() {
+    if diag.has_errors() {
         let vec = diag.to_string_vec();
         diag.print();
         return Err(CompileError::CompileError(vec));
@@ -337,10 +374,10 @@ pub fn compile_with_config(
     let syntax_node = syntax_node.expect("diags contained no compilation errors");
 
     // 'spin_on' is ok here because the compiler in single threaded and does not block if there is no blocking future
-    let (doc, diag) =
+    let (doc, diag, loader) =
         spin_on::spin_on(i_slint_compiler::compile_syntax_node(syntax_node, diag, compiler_config));
 
-    if diag.has_error() {
+    if diag.has_errors() {
         let vec = diag.to_string_vec();
         diag.print();
         return Err(CompileError::CompileError(vec));
@@ -355,8 +392,8 @@ pub fn compile_with_config(
         );
 
     let file = std::fs::File::create(&output_file_path).map_err(CompileError::SaveError)?;
-    let mut code_formatter = CodeFormatter::new(file);
-    let generated = i_slint_compiler::generator::rust::generate(&doc);
+    let mut code_formatter = CodeFormatter::new(BufWriter::new(file));
+    let generated = i_slint_compiler::generator::rust::generate(&doc, &loader.compiler_config);
 
     for x in &diag.all_loaded_files {
         if x.is_absolute() {
@@ -374,7 +411,7 @@ pub fn compile_with_config(
     write!(code_formatter, "{}", generated).map_err(CompileError::SaveError)?;
     println!("cargo:rerun-if-changed={}", path.display());
 
-    for resource in doc.root_component.embedded_file_resources.borrow().keys() {
+    for resource in doc.embedded_file_resources.borrow().keys() {
         if !resource.starts_with("builtin:") {
             println!("cargo:rerun-if-changed={}", resource);
         }
@@ -384,6 +421,7 @@ pub fn compile_with_config(
     println!("cargo:rerun-if-env-changed=SLINT_SCALE_FACTOR");
     println!("cargo:rerun-if-env-changed=SLINT_ASSET_SECTION");
     println!("cargo:rerun-if-env-changed=SLINT_EMBED_RESOURCES");
+    println!("cargo:rerun-if-env-changed=SLINT_EMIT_DEBUG_INFO");
 
     println!("cargo:rustc-env=SLINT_INCLUDE_GENERATED={}", output_file_path.display());
 
@@ -397,7 +435,7 @@ pub fn print_rustc_flags() -> std::io::Result<()> {
         std::env::var_os("DEP_MCU_BOARD_SUPPORT_BOARD_CONFIG_PATH").map(std::path::PathBuf::from)
     {
         let config = std::fs::read_to_string(board_config_path.as_path())?;
-        let toml = config.parse::<toml_edit::Document>().expect("invalid board config toml");
+        let toml = config.parse::<toml_edit::DocumentMut>().expect("invalid board config toml");
 
         for link_arg in
             toml.get("link_args").and_then(toml_edit::Item::as_array).into_iter().flatten()

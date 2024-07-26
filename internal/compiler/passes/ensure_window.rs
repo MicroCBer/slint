@@ -1,9 +1,10 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Make sure that the top level element of the component is always a Window
 
-use crate::expression_tree::{BindingExpression, Expression};
+use crate::diagnostics::BuildDiagnostics;
+use crate::expression_tree::{BindingExpression, BuiltinFunction, Expression};
 use crate::langtype::Type;
 use crate::namedreference::NamedReference;
 use crate::object_tree::{Component, Element};
@@ -16,10 +17,16 @@ pub fn ensure_window(
     component: &Rc<Component>,
     type_register: &TypeRegister,
     style_metrics: &Rc<Component>,
+    diag: &mut BuildDiagnostics,
 ) {
-    if component.root_element.borrow().builtin_type().map_or(true, |b| {
-        matches!(b.name.as_str(), "Window" | "Dialog" | "WindowItem" | "PopupWindow")
-    }) {
+    if component.inherits_popup_window.get() {
+        diag.push_error(
+            "PopupWindow cannot be the top level".into(),
+            &*component.root_element.borrow(),
+        );
+    }
+
+    if inherits_window(component) {
         return; // already a window, nothing to do
     }
 
@@ -33,6 +40,7 @@ pub fn ensure_window(
         id: std::mem::replace(&mut win_elem_mut.id, "root_window".into()),
         base_type: std::mem::replace(&mut win_elem_mut.base_type, window_type),
         bindings: Default::default(),
+        change_callbacks: Default::default(),
         is_component_placeholder: false,
         property_analysis: Default::default(),
         children: std::mem::take(&mut win_elem_mut.children),
@@ -51,8 +59,8 @@ pub fn ensure_window(
         is_flickable_viewport: false,
         item_index: Default::default(),
         item_index_of_first_children: Default::default(),
-        node: win_elem_mut.node.clone(),
-        layout: win_elem_mut.layout.clone(),
+        debug: std::mem::take(&mut win_elem_mut.debug),
+
         inline_depth: 0,
         is_legacy_syntax: false,
     };
@@ -99,6 +107,31 @@ pub fn ensure_window(
         }
     });
 
+    // Fix up any ElementReferences for builtin member function calls, to not refer to the WindowItem,
+    // as we swapped out the base_type.
+    let fixup_element_reference = |expr: &mut Expression| match expr {
+        Expression::FunctionCall { function, arguments, .. }
+            if matches!(
+                function.as_ref(),
+                Expression::BuiltinFunctionReference(BuiltinFunction::ItemMemberFunction(..), ..)
+            ) =>
+        {
+            for arg in arguments.iter_mut() {
+                if matches!(arg, Expression::ElementReference(elr)
+                    if elr.upgrade().map_or(false, |elemrc| Rc::ptr_eq(&elemrc, &win_elem)) )
+                {
+                    *arg = Expression::ElementReference(Rc::downgrade(&new_root))
+                }
+            }
+        }
+        _ => {}
+    };
+
+    crate::object_tree::visit_all_expressions(component, |expr, _| {
+        expr.visit_recursive_mut(&mut |expr| fixup_element_reference(expr));
+        fixup_element_reference(expr)
+    });
+
     component.root_element.borrow_mut().set_binding_if_not_set("background".into(), || {
         Expression::Cast {
             from: Expression::PropertyReference(NamedReference::new(
@@ -109,4 +142,10 @@ pub fn ensure_window(
             to: Type::Brush,
         }
     });
+}
+
+pub fn inherits_window(component: &Rc<Component>) -> bool {
+    component.root_element.borrow().builtin_type().map_or(true, |b| {
+        matches!(b.name.as_str(), "Window" | "Dialog" | "WindowItem" | "PopupWindow")
+    })
 }

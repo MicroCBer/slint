@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -154,8 +154,11 @@ pub fn lower_expression(
         tree_Expression::UnaryOp { sub, op } => {
             llr_Expression::UnaryOp { sub: Box::new(lower_expression(sub, ctx)), op: *op }
         }
-        tree_Expression::ImageReference { resource_ref, .. } => {
-            llr_Expression::ImageReference { resource_ref: resource_ref.clone() }
+        tree_Expression::ImageReference { resource_ref, nine_slice, .. } => {
+            llr_Expression::ImageReference {
+                resource_ref: resource_ref.clone(),
+                nine_slice: *nine_slice,
+            }
         }
         tree_Expression::Condition { condition, true_expr, false_expr } => {
             llr_Expression::Condition {
@@ -210,6 +213,7 @@ pub fn lower_expression(
             lhs: Box::new(lower_expression(lhs, ctx)),
             rhs: Box::new(lower_expression(rhs, ctx)),
         },
+        tree_Expression::EmptyComponentFactory => llr_Expression::EmptyComponentFactory,
     }
 }
 
@@ -366,8 +370,6 @@ fn lower_show_popup(args: &[tree_Expression], ctx: &ExpressionContext) -> llr_Ex
             .enumerate()
             .find(|(_, p)| Rc::ptr_eq(&p.component, &pop_comp))
             .unwrap();
-        let x = llr_Expression::PropertyReference(ctx.map_property_reference(&popup.x));
-        let y = llr_Expression::PropertyReference(ctx.map_property_reference(&popup.y));
         let item_ref = lower_expression(
             &tree_Expression::ElementReference(Rc::downgrade(&popup.parent_element)),
             ctx,
@@ -376,8 +378,6 @@ fn lower_show_popup(args: &[tree_Expression], ctx: &ExpressionContext) -> llr_Ex
             function: BuiltinFunction::ShowPopupWindow,
             arguments: vec![
                 llr_Expression::NumberLiteral(popup_index as _),
-                x,
-                y,
                 llr_Expression::BoolLiteral(popup.close_on_click),
                 item_ref,
             ],
@@ -415,7 +415,7 @@ pub fn lower_animation(a: &PropertyAnimation, ctx: &ExpressionContext<'_>) -> An
     fn animation_ty() -> Type {
         Type::Struct {
             fields: animation_fields().collect(),
-            name: Some("PropertyAnimation".into()),
+            name: Some("slint::private_api::PropertyAnimation".into()),
             node: None,
             rust_attributes: None,
         }
@@ -560,7 +560,7 @@ fn solve_layout(
                     llr_Expression::ExtraBuiltinFunctionCall {
                         function: "solve_grid_layout".into(),
                         arguments: vec![make_struct(
-                            "GridLayoutData".into(),
+                            "GridLayoutData",
                             [
                                 ("size", Type::Float32, size),
                                 ("spacing", Type::Float32, spacing),
@@ -582,7 +582,7 @@ fn solve_layout(
                 llr_Expression::ExtraBuiltinFunctionCall {
                     function: "solve_grid_layout".into(),
                     arguments: vec![make_struct(
-                        "GridLayoutData".into(),
+                        "GridLayoutData",
                         [
                             ("size", Type::Float32, size),
                             ("spacing", Type::Float32, spacing),
@@ -599,7 +599,7 @@ fn solve_layout(
             let bld = box_layout_data(layout, o, ctx);
             let size = layout_geometry_size(&layout.geometry.rect, o, ctx);
             let data = make_struct(
-                "BoxLayoutData".into(),
+                "BoxLayoutData",
                 [
                     ("size", Type::Float32, size),
                     ("spacing", Type::Float32, spacing),
@@ -694,7 +694,7 @@ fn box_layout_data(
                     let layout_info =
                         get_layout_info(&li.element, ctx, &li.constraints, orientation);
                     make_struct(
-                        "BoxLayoutCellData".into(),
+                        "BoxLayoutCellData",
                         [("constraint", crate::layout::layout_info_type(), layout_info)],
                     )
                 })
@@ -717,7 +717,7 @@ fn box_layout_data(
                 let layout_info =
                     get_layout_info(&item.element, ctx, &item.constraints, orientation);
                 elements.push(Either::Left(make_struct(
-                    "BoxLayoutCellData".into(),
+                    "BoxLayoutCellData",
                     [("constraint", crate::layout::layout_info_type(), layout_info)],
                 )));
             }
@@ -746,7 +746,7 @@ fn grid_layout_cell_data(
                     get_layout_info(&c.item.element, ctx, &c.item.constraints, orientation);
 
                 make_struct(
-                    "GridLayoutCellData".into(),
+                    "GridLayoutCellData",
                     [
                         ("constraint", crate::layout::layout_info_type(), layout_info),
                         ("col_or_row", Type::Int32, llr_Expression::NumberLiteral(col_or_row as _)),
@@ -789,7 +789,7 @@ fn generate_layout_padding_and_spacing(
     let (begin, end) = layout_geometry.padding.begin_end(orientation);
 
     let padding = make_struct(
-        "Padding".into(),
+        "Padding",
         [("begin", Type::Float32, padding_prop(begin)), ("end", Type::Float32, padding_prop(end))],
     );
 
@@ -975,8 +975,8 @@ fn compile_path(path: &crate::expression_tree::Path, ctx: &ExpressionContext) ->
     }
 }
 
-fn make_struct(
-    name: String,
+pub fn make_struct(
+    name: &str,
     it: impl IntoIterator<Item = (&'static str, Type, llr_Expression)>,
 ) -> llr_Expression {
     let mut fields = BTreeMap::<String, Type>::new();
@@ -987,7 +987,12 @@ fn make_struct(
     }
 
     llr_Expression::Struct {
-        ty: Type::Struct { fields, name: Some(name), node: None, rust_attributes: None },
+        ty: Type::Struct {
+            fields,
+            name: Some(format!("slint::private_api::{name}")),
+            node: None,
+            rust_attributes: None,
+        },
         values,
     }
 }

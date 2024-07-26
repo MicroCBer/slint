@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Passes that resolve the type of two way bindings.
 //!
@@ -71,16 +71,26 @@ fn resolve_alias(
                 Type::InferredCallback | Type::InferredProperty
             ));
             // It is still unresolved because there is an error in that component
-            assert!(diag.has_error());
+            assert!(diag.has_errors());
             return;
         }
     };
     drop(borrow_mut);
 
-    let nr = match &elem.borrow().bindings[prop].borrow().expression {
+    let borrow = elem.borrow();
+    let Some(binding) = borrow.bindings.get(prop) else {
+        assert!(diag.has_errors());
+        return;
+    };
+    let nr = match &binding.borrow().expression {
         Expression::Uncompiled(node) => {
-            let node = syntax_nodes::TwoWayBinding::new(node.clone())
-                .expect("The parser only avoid missing types for two way bindings");
+            let Some(node) = syntax_nodes::TwoWayBinding::new(node.clone()) else {
+                assert!(
+                    diag.has_errors(),
+                    "The parser only avoid missing types for two way bindings"
+                );
+                return;
+            };
             let mut lookup_ctx = LookupCtx::empty_context(type_register, diag);
             lookup_ctx.property_name = Some(prop);
             lookup_ctx.property_type = old_type.clone();
@@ -89,13 +99,22 @@ fn resolve_alias(
         }
         _ => panic!("There should be a Uncompiled expression at this point."),
     };
+    drop(borrow);
 
     let mut ty = Type::Invalid;
     if let Some(nr) = &nr {
+        let element = nr.element();
+        let same_element = Rc::ptr_eq(&element, elem);
+        if same_element && nr.name() == prop {
+            diag.push_error(
+                "Cannot alias to itself".to_string(),
+                &elem.borrow().property_declarations[prop].type_node(),
+            );
+            return;
+        }
         ty = nr.ty();
         if matches!(ty, Type::InferredCallback | Type::InferredProperty) {
-            let element = nr.element();
-            if Rc::ptr_eq(&element, elem) {
+            if same_element {
                 resolve_alias(&element, nr.name(), scope, type_register, diag)
             } else {
                 resolve_alias(&element, nr.name(), &recompute_scope(&element), type_register, diag)
@@ -116,7 +135,7 @@ fn resolve_alias(
     } else if old_type == Type::InferredCallback {
         if !matches!(ty, Type::Callback { .. }) {
             if nr.is_some() && ty == Type::Invalid {
-                debug_assert!(diag.has_error());
+                debug_assert!(diag.has_errors());
             } else {
                 diag.push_error(
                     format!("Binding to callback '{}' must bind to another callback", prop),

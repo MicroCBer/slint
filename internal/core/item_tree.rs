@@ -1,17 +1,21 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore xffff
 
 //! This module contains the ItemTree and code that helps navigating it
 
-use crate::accessibility::AccessibleStringProperty;
+use crate::accessibility::{
+    AccessibilityAction, AccessibleStringProperty, SupportedAccessibilityAction,
+};
 use crate::items::{AccessibleRole, ItemRef, ItemVTable};
 use crate::layout::{LayoutInfo, Orientation};
 use crate::lengths::{LogicalPoint, LogicalRect};
 use crate::slice::Slice;
 use crate::window::WindowAdapterRc;
 use crate::SharedString;
+use alloc::vec::Vec;
+use core::ops::ControlFlow;
 use core::pin::Pin;
 use vtable::*;
 
@@ -105,13 +109,33 @@ pub struct ItemTreeVTable {
     pub accessible_role:
         extern "C" fn(core::pin::Pin<VRef<ItemTreeVTable>>, item_index: u32) -> AccessibleRole,
 
-    /// Returns the accessible property
+    /// Returns the accessible property via the `result`. Returns true if such a property exists.
     pub accessible_string_property: extern "C" fn(
         core::pin::Pin<VRef<ItemTreeVTable>>,
         item_index: u32,
         what: AccessibleStringProperty,
         result: &mut SharedString,
+    ) -> bool,
+
+    /// Executes an accessibility action.
+    pub accessibility_action: extern "C" fn(
+        core::pin::Pin<VRef<ItemTreeVTable>>,
+        item_index: u32,
+        action: &AccessibilityAction,
     ),
+
+    /// Returns the supported accessibility actions.
+    pub supported_accessibility_actions: extern "C" fn(
+        core::pin::Pin<VRef<ItemTreeVTable>>,
+        item_index: u32,
+    ) -> SupportedAccessibilityAction,
+
+    /// Add the `ElementName::id` entries of the given item
+    pub item_element_infos: extern "C" fn(
+        core::pin::Pin<VRef<ItemTreeVTable>>,
+        item_index: u32,
+        result: &mut SharedString,
+    ) -> bool,
 
     /// Returns a Window, creating a fresh one if `do_create` is true.
     pub window_adapter: extern "C" fn(
@@ -122,6 +146,7 @@ pub struct ItemTreeVTable {
 
     /// in-place destructor (for VRc)
     pub drop_in_place: unsafe fn(VRefMut<ItemTreeVTable>) -> vtable::Layout,
+
     /// dealloc function (for VRc)
     pub dealloc: unsafe fn(&ItemTreeVTable, ptr: *mut u8, layout: vtable::Layout),
 }
@@ -288,21 +313,35 @@ impl ItemRc {
         r.upgrade()?.parent_item()
     }
 
-    // FIXME: This should be nicer/done elsewhere?
+    /// Returns true if this item is visible from the root of the item tree. Note that this will return
+    /// false for `Clip` elements with the `clip` property evaluating to true.
     pub fn is_visible(&self) -> bool {
+        let (clip, geometry) = self.absolute_clip_rect_and_geometry();
+        let intersection = geometry.intersection(&clip).unwrap_or_default();
+        !intersection.is_empty() || (geometry.is_empty() && clip.contains(geometry.center()))
+    }
+
+    /// Returns the clip rect that applies to this item (in window coordinates) as well as the
+    /// item's (unclipped) geometry (also in window coordinates).
+    fn absolute_clip_rect_and_geometry(&self) -> (LogicalRect, LogicalRect) {
+        let (mut clip, parent_geometry) = self.parent_item().map_or_else(
+            || {
+                (
+                    LogicalRect::from_size((crate::Coord::MAX, crate::Coord::MAX).into()),
+                    Default::default(),
+                )
+            },
+            |parent| parent.absolute_clip_rect_and_geometry(),
+        );
+
+        let geometry = self.geometry().translate(parent_geometry.origin.to_vector());
+
         let item = self.borrow();
-        let is_clipping = crate::item_rendering::is_clipping_item(item);
-        let geometry = self.geometry();
-
-        if is_clipping && (geometry.width() <= 0.01 as _ || geometry.height() <= 0.01 as _) {
-            return false;
+        if crate::item_rendering::is_clipping_item(item) {
+            clip = geometry.intersection(&clip).unwrap_or_default();
         }
 
-        if let Some(parent) = self.parent_item() {
-            parent.is_visible()
-        } else {
-            true
-        }
+        (clip, geometry)
     }
 
     pub fn is_accessible(&self) -> bool {
@@ -327,11 +366,53 @@ impl ItemRc {
     pub fn accessible_string_property(
         &self,
         what: crate::accessibility::AccessibleStringProperty,
-    ) -> SharedString {
+    ) -> Option<SharedString> {
         let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
         let mut result = Default::default();
-        comp_ref_pin.as_ref().accessible_string_property(self.index, what, &mut result);
-        result
+        let ok = comp_ref_pin.as_ref().accessible_string_property(self.index, what, &mut result);
+        ok.then_some(result)
+    }
+
+    pub fn accessible_action(&self, action: &crate::accessibility::AccessibilityAction) {
+        let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
+        comp_ref_pin.as_ref().accessibility_action(self.index, action);
+    }
+
+    pub fn supported_accessibility_actions(&self) -> SupportedAccessibilityAction {
+        let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
+        comp_ref_pin.as_ref().supported_accessibility_actions(self.index)
+    }
+
+    pub fn element_count(&self) -> Option<usize> {
+        let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
+        let mut result = SharedString::new();
+        comp_ref_pin
+            .as_ref()
+            .item_element_infos(self.index, &mut result)
+            .then(|| result.as_str().split("/").count())
+    }
+
+    pub fn element_type_names_and_ids(
+        &self,
+        element_index: usize,
+    ) -> Option<Vec<(SharedString, SharedString)>> {
+        let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
+        let mut result = SharedString::new();
+        comp_ref_pin.as_ref().item_element_infos(self.index, &mut result).then(|| {
+            result
+                .as_str()
+                .split("/")
+                .nth(element_index)
+                .unwrap()
+                .split(";")
+                .map(|encoded_elem_info| {
+                    let mut decoder = encoded_elem_info.split(',');
+                    let type_name = decoder.next().unwrap().into();
+                    let id = decoder.next().map(Into::into).unwrap_or_default();
+                    (type_name, id)
+                })
+                .collect()
+        })
     }
 
     pub fn geometry(&self) -> LogicalRect {
@@ -623,6 +704,62 @@ impl ItemRc {
             &core::convert::identity,
             &|item_tree, index| crate::item_focus::step_out_of_node(index, item_tree),
         )
+    }
+
+    pub fn window_adapter(&self) -> Option<WindowAdapterRc> {
+        let comp_ref_pin = vtable::VRc::borrow_pin(&self.item_tree);
+        let mut result = None;
+        comp_ref_pin.as_ref().window_adapter(false, &mut result);
+        result
+    }
+
+    /// Visit the children of this element and call the visitor to each of them, until the visitor returns [`ControlFlow::Break`].
+    /// When the visitor breaks, the function returns the value. If it doesn't break, the function returns None.
+    fn visit_descendants_impl<R>(
+        &self,
+        visitor: &mut impl FnMut(&ItemRc) -> ControlFlow<R>,
+    ) -> Option<R> {
+        let mut result = None;
+
+        let mut actual_visitor = |item_tree: &ItemTreeRc,
+                                  index: u32,
+                                  _item_pin: core::pin::Pin<ItemRef>|
+         -> VisitChildrenResult {
+            let item_rc = ItemRc::new(item_tree.clone(), index);
+
+            match visitor(&item_rc) {
+                ControlFlow::Continue(_) => {
+                    if let Some(x) = item_rc.visit_descendants_impl(visitor) {
+                        result = Some(x);
+                        return VisitChildrenResult::abort(index, 0);
+                    }
+                }
+                ControlFlow::Break(x) => {
+                    result = Some(x);
+                    return VisitChildrenResult::abort(index, 0);
+                }
+            }
+
+            VisitChildrenResult::CONTINUE
+        };
+        vtable::new_vref!(let mut actual_visitor : VRefMut<ItemVisitorVTable> for ItemVisitor = &mut actual_visitor);
+
+        VRc::borrow_pin(self.item_tree()).as_ref().visit_children_item(
+            self.index() as isize,
+            TraversalOrder::BackToFront,
+            actual_visitor,
+        );
+
+        result
+    }
+
+    /// Visit the children of this element and call the visitor to each of them, until the visitor returns [`ControlFlow::Break`].
+    /// When the visitor breaks, the function returns the value. If it doesn't break, the function returns None.
+    pub fn visit_descendants<R>(
+        &self,
+        mut visitor: impl FnMut(&ItemRc) -> ControlFlow<R>,
+    ) -> Option<R> {
+        self.visit_descendants_impl(&mut visitor)
     }
 }
 
@@ -986,7 +1123,7 @@ pub(crate) mod ffi {
     #![allow(unsafe_code)]
 
     use super::*;
-    use crate::slice::Slice;
+    use core::ffi::c_void;
 
     /// Call init() on the ItemVTable of each item in the item array.
     #[no_mangle]
@@ -1019,44 +1156,33 @@ pub(crate) mod ffi {
     /// Safety: Assume a correct implementation of the item_tree array
     #[no_mangle]
     pub unsafe extern "C" fn slint_visit_item_tree(
-        component: &ItemTreeRc,
-        item_tree: Slice<ItemTreeNode>,
+        item_tree: &ItemTreeRc,
+        item_tree_array: Slice<ItemTreeNode>,
         index: isize,
         order: TraversalOrder,
         visitor: VRefMut<ItemVisitorVTable>,
         visit_dynamic: extern "C" fn(
-            base: &u8,
+            base: *const c_void,
             order: TraversalOrder,
             visitor: vtable::VRefMut<ItemVisitorVTable>,
             dyn_index: u32,
         ) -> VisitChildrenResult,
     ) -> VisitChildrenResult {
         crate::item_tree::visit_item_tree(
-            Pin::new_unchecked(&*(&**component as *const Dyn as *const u8)),
-            component,
-            item_tree.as_slice(),
+            VRc::as_pin_ref(item_tree),
+            item_tree,
+            item_tree_array.as_slice(),
             index,
             order,
             visitor,
-            |a, b, c, d| visit_dynamic(a.get_ref(), b, c, d),
+            |a, b, c, d| visit_dynamic(a.get_ref() as *const vtable::Dyn as *const c_void, b, c, d),
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(unsafe_code)]
-
     use super::*;
-
-    use crate::accessibility::AccessibleStringProperty;
-    use crate::items::AccessibleRole;
-    use crate::layout::{LayoutInfo, Orientation};
-    use crate::slice::Slice;
-    use crate::window::WindowAdapterRc;
-    use crate::SharedString;
-
-    use vtable::VRc;
 
     struct TestItemTree {
         parent_component: Option<ItemTreeRc>,
@@ -1133,7 +1259,12 @@ mod tests {
             _: u32,
             _: AccessibleStringProperty,
             _: &mut SharedString,
-        ) {
+        ) -> bool {
+            false
+        }
+
+        fn item_element_infos(self: Pin<&Self>, _: u32, _: &mut SharedString) -> bool {
+            false
         }
 
         fn window_adapter(
@@ -1145,6 +1276,17 @@ mod tests {
         }
 
         fn item_geometry(self: Pin<&Self>, _: u32) -> LogicalRect {
+            unimplemented!("Not needed for this test")
+        }
+
+        fn accessibility_action(self: core::pin::Pin<&Self>, _: u32, _: &AccessibilityAction) {
+            unimplemented!("Not needed for this test")
+        }
+
+        fn supported_accessibility_actions(
+            self: core::pin::Pin<&Self>,
+            _: u32,
+        ) -> SupportedAccessibilityAction {
             unimplemented!("Not needed for this test")
         }
     }

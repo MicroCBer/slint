@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore bindgen lumino
 
@@ -25,11 +25,6 @@ export class PreviewWidget extends Widget {
         canvas.style.height = "100%";
         canvas.style.outline = "none";
         canvas.style.touchAction = "none";
-        canvas.width = canvas.offsetWidth;
-        canvas.height = canvas.offsetHeight;
-
-        canvas.dataset.slintAutoResizeToPreferred = "false";
-
         node.appendChild(canvas);
 
         return node;
@@ -56,6 +51,11 @@ export class PreviewWidget extends Widget {
             // when searching the document.
             this.#previewer.show_ui().then(() => {
                 console.info("UI should be up!");
+                const canvas = document.getElementById(
+                    canvas_id,
+                ) as HTMLElement;
+                canvas.style.width = "100%";
+                canvas.style.height = "100%";
             });
         });
     }

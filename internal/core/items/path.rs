@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This module contains the builtin Path related items.
@@ -17,7 +17,9 @@ use crate::input::{
 use crate::item_rendering::CachedRenderingData;
 
 use crate::layout::{LayoutInfo, Orientation};
-use crate::lengths::{LogicalLength, LogicalSize, LogicalVector, PointLengths, RectLengths};
+use crate::lengths::{
+    LogicalBorderRadius, LogicalLength, LogicalSize, LogicalVector, PointLengths, RectLengths,
+};
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
 use crate::window::WindowAdapter;
@@ -113,7 +115,11 @@ impl Item for Path {
         let clip = self.clip();
         if clip {
             (*backend).save_state();
-            (*backend).combine_clip(size.into(), LogicalLength::zero(), LogicalLength::zero());
+            (*backend).combine_clip(
+                size.into(),
+                LogicalBorderRadius::zero(),
+                LogicalLength::zero(),
+            );
         }
         (*backend).draw_path(self, self_rc, size);
         if clip {

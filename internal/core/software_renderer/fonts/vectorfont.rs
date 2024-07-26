@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use alloc::rc::Rc;
 
@@ -140,7 +140,7 @@ impl TextShaper for VectorFont {
                     face.glyph_index(ch).map(|glyph_index| {
                         let mut out_glyph = Glyph::default();
 
-                        out_glyph.glyph_id = core::num::NonZeroU16::new(glyph_index.0 as u16);
+                        out_glyph.glyph_id = core::num::NonZeroU16::new(glyph_index.0);
 
                         out_glyph.advance = (FontLength::new(
                             face.glyph_hor_advance(glyph_index).unwrap_or_default() as _,

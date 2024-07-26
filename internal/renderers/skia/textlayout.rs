@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -89,7 +89,7 @@ pub fn create_layout(
 
     if overflow == items::TextOverflow::Elide {
         style.set_ellipsis("…");
-        if wrap == items::TextWrap::WordWrap {
+        if wrap != items::TextWrap::NoWrap {
             let metrics = text_style.font_metrics();
             let line_height = metrics.descent - metrics.ascent + metrics.leading;
             style.set_max_lines((max_height.get() / line_height).floor() as usize);

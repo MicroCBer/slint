@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! This module is meant to be included by different crate and each crate must define the macro for_each_keys
 //!
@@ -46,6 +46,8 @@ macro_rules! for_each_special_keys {
 // which makes those keys appear as text.
 '\u{0017}'  # Meta        # Qt_Key_Key_Meta         # Super(Left)  # Meta_L     ;
 '\u{0018}'  # MetaR       #                         # Super(Right) # Meta_R     ;
+
+'\u{0020}'  # Space       # Qt_Key_Key_Space        # Space # space     ;
 
 '\u{F700}'	# UpArrow     # Qt_Key_Key_Up           # ArrowUp           # Up         ;
 '\u{F701}'	# DownArrow   # Qt_Key_Key_Down         # ArrowDown         # Down       ;

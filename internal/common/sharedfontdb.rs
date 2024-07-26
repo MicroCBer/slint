@@ -1,20 +1,22 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::cell::RefCell;
+use std::sync::Arc;
 
 pub use fontdb;
 
-#[derive(derive_more::Deref, derive_more::DerefMut)]
+#[derive(derive_more::Deref)]
 pub struct FontDatabase {
+    // This is in a Arc because usvg takes the database in a Arc
     #[deref]
-    #[deref_mut]
-    db: fontdb::Database,
+    db: Arc<fontdb::Database>,
     #[cfg(not(any(
         target_family = "windows",
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        target_os = "android",
     )))]
     pub fontconfig_fallback_families: Vec<String>,
     // Default font families to use instead of SansSerif when SLINT_DEFAULT_FONT env var is set.
@@ -47,6 +49,10 @@ impl FontDatabase {
             self.db.query(&query)
         }
     }
+
+    pub fn make_mut(&mut self) -> &mut fontdb::Database {
+        Arc::make_mut(&mut self.db)
+    }
 }
 
 thread_local! {
@@ -57,7 +63,8 @@ thread_local! {
     target_family = "windows",
     target_os = "macos",
     target_os = "ios",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    target_os = "android",
 )))]
 mod fontconfig;
 
@@ -110,7 +117,8 @@ fn init_fontdb() -> FontDatabase {
         target_family = "windows",
         target_os = "macos",
         target_os = "ios",
-        target_arch = "wasm32"
+        target_arch = "wasm32",
+        target_os = "android",
     )))]
     let mut fontconfig_fallback_families = Vec::new();
 
@@ -120,7 +128,12 @@ fn init_fontdb() -> FontDatabase {
         font_db.load_font_data(data.to_vec());
         font_db.set_sans_serif_family("DejaVu Sans");
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    {
+        font_db.load_fonts_dir("/system/fonts");
+        font_db.set_sans_serif_family("Roboto");
+    }
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     {
         font_db.load_system_fonts();
         cfg_if::cfg_if! {
@@ -128,7 +141,8 @@ fn init_fontdb() -> FontDatabase {
                 target_family = "windows",
                 target_os = "macos",
                 target_os = "ios",
-                target_arch = "wasm32"
+                target_arch = "wasm32",
+                target_os = "android",
             )))] {
                 match fontconfig::find_families("sans-serif") {
                     Ok(mut fallback_families) => {
@@ -156,12 +170,13 @@ fn init_fontdb() -> FontDatabase {
     }
 
     FontDatabase {
-        db: font_db,
+        db: Arc::new(font_db),
         #[cfg(not(any(
             target_family = "windows",
             target_os = "macos",
             target_os = "ios",
-            target_arch = "wasm32"
+            target_arch = "wasm32",
+            target_os = "android",
         )))]
         fontconfig_fallback_families,
         default_font_family_ids,
@@ -173,8 +188,8 @@ fn init_fontdb() -> FontDatabase {
 /// for use with the `font-family` property. The provided slice must be a valid TrueType
 /// font.
 pub fn register_font_from_memory(data: &'static [u8]) -> Result<(), Box<dyn std::error::Error>> {
-    FONT_DB.with(|db| {
-        db.borrow_mut().load_font_source(fontdb::Source::Binary(std::sync::Arc::new(data)))
+    FONT_DB.with_borrow_mut(|db| {
+        db.make_mut().load_font_source(fontdb::Source::Binary(std::sync::Arc::new(data)))
     });
     Ok(())
 }
@@ -182,8 +197,8 @@ pub fn register_font_from_memory(data: &'static [u8]) -> Result<(), Box<dyn std:
 #[cfg(not(target_arch = "wasm32"))]
 pub fn register_font_from_path(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let requested_path = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-    FONT_DB.with(|db| {
-        for face_info in db.borrow().faces() {
+    FONT_DB.with_borrow_mut(|db| {
+        for face_info in db.faces() {
             match &face_info.source {
                 fontdb::Source::Binary(_) => {}
                 fontdb::Source::File(loaded_path) | fontdb::Source::SharedFile(loaded_path, ..) => {
@@ -193,8 +208,7 @@ pub fn register_font_from_path(path: &std::path::Path) -> Result<(), Box<dyn std
                 }
             }
         }
-
-        db.borrow_mut().load_font_file(requested_path).map_err(|e| e.into())
+        db.make_mut().load_font_file(requested_path).map_err(|e| e.into())
     })
 }
 

@@ -1,14 +1,15 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
+use crate::PhysicalSize;
 #[cfg(skia_backend_opengl)]
 use i_slint_core::graphics::BorrowedOpenGLTexture;
 use i_slint_core::graphics::{
-    cache as core_cache, Image, ImageCacheKey, ImageInner, IntSize, OpaqueImage, OpaqueImageVTable,
-    SharedImageBuffer,
+    cache as core_cache, Image, ImageCacheKey, ImageInner, IntRect, IntSize, OpaqueImage,
+    OpaqueImageVTable, SharedImageBuffer,
 };
 use i_slint_core::items::ImageFit;
-use i_slint_core::lengths::{LogicalLength, LogicalSize, ScaleFactor};
+use i_slint_core::lengths::{LogicalSize, ScaleFactor};
 
 struct SkiaCachedImage {
     image: skia_safe::Image,
@@ -31,10 +32,10 @@ impl OpaqueImage for SkiaCachedImage {
 
 pub(crate) fn as_skia_image(
     image: Image,
-    target_size_fn: &dyn Fn() -> (LogicalLength, LogicalLength),
+    target_size_fn: &dyn Fn() -> LogicalSize,
     image_fit: ImageFit,
     scale_factor: ScaleFactor,
-    _canvas: &skia_safe::Canvas,
+    canvas: &skia_safe::Canvas,
 ) -> Option<skia_safe::Image> {
     let image_inner: &ImageInner = (&image).into();
     match image_inner {
@@ -53,9 +54,19 @@ pub(crate) fn as_skia_image(
         }
         ImageInner::Svg(svg) => {
             // Query target_width/height here again to ensure that changes will invalidate the item rendering cache.
-            let (target_width, target_height) = target_size_fn();
-            let target_size = LogicalSize::from_lengths(target_width, target_height) * scale_factor;
-            let target_size = i_slint_core::graphics::fit_size(image_fit, target_size, svg.size());
+            let svg_size = svg.size();
+            let fit = i_slint_core::graphics::fit(
+                image_fit,
+                target_size_fn() * scale_factor,
+                IntRect::from_size(svg_size.cast()),
+                scale_factor,
+                Default::default(), // We only care about the size, so alignments don't matter
+                Default::default(),
+            );
+            let target_size = PhysicalSize::new(
+                svg_size.cast::<f32>().width * fit.source_to_target_x,
+                svg_size.cast::<f32>().height * fit.source_to_target_y,
+            );
             let pixels = match svg.render(Some(target_size.cast())).ok()? {
                 SharedImageBuffer::RGB8(_) => unreachable!(),
                 SharedImageBuffer::RGBA8(_) => unreachable!(),
@@ -98,7 +109,7 @@ pub(crate) fn as_skia_image(
                 "Borrowed GL texture",
             );
             skia_safe::image::Image::from_texture(
-                _canvas.recording_context().as_mut().unwrap(),
+                canvas.recording_context().as_mut().unwrap(),
                 &backend_texture,
                 match origin {
                     i_slint_core::graphics::BorrowedOpenGLTextureOrigin::TopLeft => {
@@ -118,6 +129,9 @@ pub(crate) fn as_skia_image(
         },
         #[cfg(not(skia_backend_opengl))]
         ImageInner::BorrowedOpenGLTexture(..) => None,
+        ImageInner::NineSlice(n) => {
+            as_skia_image(n.image(), target_size_fn, ImageFit::Preserve, scale_factor, canvas)
+        }
     }
 }
 

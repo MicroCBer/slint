@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { CupertinoPalette } from "styling.slint";
 
@@ -11,7 +11,9 @@ export component ProgressIndicator {
     horizontal-stretch: 1;
     vertical-stretch: 0;
     accessible-role: progress-indicator;
-    accessible-value: root.progress;
+    accessible-value: !root.indeterminate ? root.progress : "";
+    accessible-value-minimum: 0.0;
+    accessible-value-maximum: 1.0;
 
     Rectangle {
         clip: true;
@@ -19,7 +21,7 @@ export component ProgressIndicator {
 
         i-rail := Rectangle {
             border-radius: parent.border-radius;
-            background: CupertinoPalette.surface-alt;
+            background: CupertinoPalette.alternate-control-background;
             border-width: 0.5px;
             border-color: CupertinoPalette.border;
             clip: true;
@@ -36,7 +38,7 @@ export component ProgressIndicator {
             height: 100%;
             x: !root.indeterminate ? 0px : -parent.width + (parent.width * mod(animation-tick(), 2s) / 1s);
             border-radius: parent.border-radius;
-            background: CupertinoPalette.accent;
+            background: CupertinoPalette.accent-background;
         }
     }
 }

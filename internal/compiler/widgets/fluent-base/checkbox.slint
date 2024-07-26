@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { FluentFontSettings, FluentPalette, Icons } from "styling.slint";
 import { FocusBorder } from "components.slint";
@@ -19,24 +19,29 @@ export component CheckBox {
     accessible-label: root.text;
     accessible-checked <=> root.checked;
     accessible-role: checkbox;
+    accessible-action-default => {
+        root.checked = !root.checked;
+        root.toggled();
+    }
+    forward-focus: i-focus-scope;
 
     states [
         disabled when !root.enabled : {
             i-border.border-color: FluentPalette.control-strong-stroke-disabled;
             i-background.background: root.checked ? FluentPalette.accent-disabled : FluentPalette.control-alt-disabled;
-            i-icon.colorize: FluentPalette.text-on-accent-disabled;
+            i-icon.colorize: FluentPalette.text-accent-foreground-disabled;
             root.text-color: FluentPalette.text-disabled;
         }
         pressed when i-touch-area.pressed : {
             i-border.border-color: FluentPalette.control-strong-stroke-disabled;
-            i-background.background: root.checked ? FluentPalette.accent-tertiary : FluentPalette.control-alt-quartiary;
-            i-icon.colorize: FluentPalette.text-on-accent-secondary;
+            i-background.background: root.checked ? FluentPalette.tertiary-accent-background : FluentPalette.control-alt-quartiary;
+            i-icon.colorize: FluentPalette.text-accent-foreground-secondary;
         }
         hover when i-touch-area.has-hover : {
-            i-background.background: root.checked ?  FluentPalette.accent-secondary : FluentPalette.control-alt-tertiary;
+            i-background.background: root.checked ?  FluentPalette.secondary-accent-background : FluentPalette.control-alt-tertiary;
         }
         checked when root.checked && root.enabled : {
-            i-background.background: FluentPalette.accent;
+            i-background.background: FluentPalette.accent-background;
         }
     ]
 
@@ -66,7 +71,7 @@ export component CheckBox {
                 image-fit: contain;
                 visible: root.checked;
                 source: Icons.check-mark;
-                colorize: FluentPalette.on-accent;
+                colorize: FluentPalette.accent-foreground;
                 width: 12px;
 
                 animate colorize { duration: 150ms; }

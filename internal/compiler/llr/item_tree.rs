@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use super::{EvaluationContext, Expression, ParentCtx};
 use crate::langtype::{NativeClass, Type};
@@ -73,6 +73,15 @@ pub struct GlobalComponent {
     pub prop_analysis: Vec<crate::object_tree::PropertyAnalysis>,
 }
 
+impl GlobalComponent {
+    pub fn must_generate(&self) -> bool {
+        !self.is_builtin
+            && (self.exported
+                || !self.functions.is_empty()
+                || self.properties.iter().any(|p| p.use_count.get() > 0))
+    }
+}
+
 /// a Reference to a property, in the context of a SubComponent
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub enum PropertyReference {
@@ -142,47 +151,10 @@ pub struct RepeatedElement {
     pub listview: Option<ListViewInfo>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ComponentContainerIndex(u32);
-
-impl From<u32> for ComponentContainerIndex {
-    fn from(value: u32) -> Self {
-        assert!(value < ComponentContainerIndex::MAGIC);
-        ComponentContainerIndex(value + ComponentContainerIndex::MAGIC)
-    }
-}
-
-impl ComponentContainerIndex {
-    // Choose a MAGIC value that is big enough so we can have lots of repeaters
-    // (repeater_index must be < MAGIC), but small enough to leave room for
-    // lots of embeddings (which will use item_index + MAGIC as its
-    // repeater_index).
-    // Also pick a MAGIC that works on 32bit as well as 64bit systems.
-    const MAGIC: u32 = (u32::MAX / 2) + 1;
-
-    pub fn as_item_tree_index(&self) -> u32 {
-        assert!(self.0 >= ComponentContainerIndex::MAGIC);
-        self.0 - ComponentContainerIndex::MAGIC
-    }
-
-    pub fn as_repeater_index(&self) -> u32 {
-        assert!(self.0 >= ComponentContainerIndex::MAGIC);
-        self.0
-    }
-
-    pub fn try_from_repeater_index(index: u32) -> Option<Self> {
-        if index >= ComponentContainerIndex::MAGIC {
-            Some(ComponentContainerIndex(index))
-        } else {
-            None
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct ComponentContainerElement {
-    /// The item tree index of the `ComponentContainer` item node, controlling this Placeholder
-    pub component_container_item_tree_index: ComponentContainerIndex,
+    /// The index of the `ComponentContainer` in the enclosing components `item_tree` array
+    pub component_container_item_tree_index: u32,
     /// The index of the `ComponentContainer` item in the enclosing components `items` array
     pub component_container_items_index: u32,
     /// The index to a dynamic tree node where the component is supposed to be embedded at
@@ -209,9 +181,10 @@ impl std::fmt::Debug for Item {
 #[derive(Debug)]
 pub struct TreeNode {
     pub sub_component_path: Vec<usize>,
-    /// Either an index in the items or repeater, depending on repeated
+    /// Either an index in the items or repeater, depending on (repeated || component_container)
     pub item_index: u32,
     pub repeated: bool,
+    pub component_container: bool,
     pub children: Vec<TreeNode>,
     pub is_accessible: bool,
 }
@@ -267,11 +240,12 @@ pub struct SubComponent {
     pub items: Vec<Item>,
     pub repeated: Vec<RepeatedElement>,
     pub component_containers: Vec<ComponentContainerElement>,
-    pub popup_windows: Vec<ItemTree>,
+    pub popup_windows: Vec<PopupWindow>,
     pub sub_components: Vec<SubComponentInstance>,
     /// The initial value or binding for properties.
     /// This is ordered in the order they must be set.
     pub property_init: Vec<(PropertyReference, BindingExpression)>,
+    pub change_callbacks: Vec<(PropertyReference, MutExpression)>,
     /// The animation for properties which are animated
     pub animations: HashMap<PropertyReference, Expression>,
     pub two_way_bindings: Vec<(PropertyReference, PropertyReference)>,
@@ -288,7 +262,16 @@ pub struct SubComponent {
     /// Maps (item_index, property) to an expression
     pub accessible_prop: BTreeMap<(u32, String), MutExpression>,
 
+    /// Maps item index to a list of encoded element infos of the element  (type name, qualified ids).
+    pub element_infos: BTreeMap<u32, String>,
+
     pub prop_analysis: HashMap<PropertyReference, PropAnalysis>,
+}
+
+#[derive(Debug)]
+pub struct PopupWindow {
+    pub item_tree: ItemTree,
+    pub position: MutExpression,
 }
 
 #[derive(Debug, Clone)]
@@ -301,7 +284,7 @@ pub struct PropAnalysis {
 impl SubComponent {
     /// total count of repeater, including in sub components
     pub fn repeater_count(&self) -> u32 {
-        let mut count = self.repeated.len() as u32;
+        let mut count = (self.repeated.len() + self.component_containers.len()) as u32;
         for x in self.sub_components.iter() {
             count += x.ty.repeater_count();
         }
@@ -354,17 +337,24 @@ pub struct PublicComponent {
     pub public_properties: PublicProperties,
     pub private_properties: PrivateProperties,
     pub item_tree: ItemTree,
-    pub sub_components: Vec<Rc<SubComponent>>,
-    pub globals: Vec<GlobalComponent>,
+    pub name: String,
 }
 
-impl PublicComponent {
+#[derive(Debug)]
+pub struct CompilationUnit {
+    pub public_components: Vec<PublicComponent>,
+    pub sub_components: Vec<Rc<SubComponent>>,
+    pub globals: Vec<GlobalComponent>,
+    pub has_debug_info: bool,
+}
+
+impl CompilationUnit {
     pub fn for_each_sub_components<'a>(
         &'a self,
         visitor: &mut dyn FnMut(&'a SubComponent, &EvaluationContext<'_>),
     ) {
         fn visit_component<'a>(
-            root: &'a PublicComponent,
+            root: &'a CompilationUnit,
             c: &'a SubComponent,
             visitor: &mut dyn FnMut(&'a SubComponent, &EvaluationContext<'_>),
             parent: Option<ParentCtx<'_>>,
@@ -379,14 +369,21 @@ impl PublicComponent {
                     Some(ParentCtx::new(&ctx, Some(idx as u32))),
                 );
             }
-            for x in &c.popup_windows {
-                visit_component(root, &x.root, visitor, Some(ParentCtx::new(&ctx, None)));
+            for popup in &c.popup_windows {
+                visit_component(
+                    root,
+                    &popup.item_tree.root,
+                    visitor,
+                    Some(ParentCtx::new(&ctx, None)),
+                );
             }
         }
         for c in &self.sub_components {
             visit_component(self, c, visitor, None);
         }
-        visit_component(self, &self.item_tree.root, visitor, None);
+        for p in &self.public_components {
+            visit_component(self, &p.item_tree.root, visitor, None);
+        }
     }
 
     pub fn for_each_expression<'a>(
@@ -405,10 +402,11 @@ impl PublicComponent {
             for e in sc.accessible_prop.values() {
                 visitor(e, ctx);
             }
-            for i in &sc.geometries {
-                if let Some(e) = i {
-                    visitor(e, ctx);
-                }
+            for i in sc.geometries.iter().flatten() {
+                visitor(i, ctx);
+            }
+            for (_, e) in sc.change_callbacks.iter() {
+                visitor(e, ctx);
             }
         });
         for g in &self.globals {

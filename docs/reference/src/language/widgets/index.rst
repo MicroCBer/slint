@@ -17,6 +17,7 @@ Widgets
    checkbox.md
    combobox.md
    gridbox.md
+   groupbox.md
    horizontalbox.md
    lineedit.md
    listview.md
@@ -32,3 +33,5 @@ Widgets
    tabwidget.md
    textedit.md
    verticalbox.md
+   timepicker.md
+   datepicker.md

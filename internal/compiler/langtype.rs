@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -481,23 +481,26 @@ impl ElementType {
         }
     }
 
-    pub fn lookup_type_for_child_element(
+    /// This function looks at the element and checks whether it can have Elements of type `name` as children.
+    /// It returns an Error if that is not possible or an Option of the ElementType if it is.
+    /// The option is unset when the compiler does not know the type well enough to avoid further
+    /// probing.
+    pub fn accepts_child_element(
         &self,
         name: &str,
         tr: &TypeRegister,
-    ) -> Result<ElementType, String> {
+    ) -> Result<Option<ElementType>, String> {
         match self {
             Self::Component(component) if component.child_insertion_point.borrow().is_none() => {
                 let base_type = component.root_element.borrow().base_type.clone();
                 if base_type == tr.empty_type() {
                     return Err(format!("'{}' cannot have children. Only components with @children can have children", component.id));
-                } else {
-                    return base_type.lookup_type_for_child_element(name, tr);
                 }
+                return base_type.accepts_child_element(name, tr);
             }
             Self::Builtin(builtin) => {
                 if let Some(child_type) = builtin.additional_accepted_child_types.get(name) {
-                    return Ok(child_type.clone());
+                    return Ok(Some(child_type.clone()));
                 }
                 if builtin.disallow_global_types_as_child_elements {
                     let mut valid_children: Vec<_> =
@@ -514,6 +517,21 @@ impl ElementType {
             }
             _ => {}
         };
+        Ok(None)
+    }
+
+    /// This function looks at the element and checks whether it can have Elements of type `name` as children.
+    /// In addition to what `accepts_child_element` does, this method also probes the type of `name`.
+    /// It returns an Error if that is not possible or an `ElementType` if it is.
+    pub fn lookup_type_for_child_element(
+        &self,
+        name: &str,
+        tr: &TypeRegister,
+    ) -> Result<ElementType, String> {
+        if let Some(ct) = self.accepts_child_element(name, tr)? {
+            return Ok(ct);
+        }
+
         tr.lookup_element(name).and_then(|t| {
             if !tr.expose_internal_types && matches!(&t, Self::Builtin(e) if e.is_internal) {
                 Err(format!("Unknown type {}. (The type exist as an internal type, but cannot be accessed in this scope)", name))
@@ -587,6 +605,17 @@ impl ElementType {
         match self {
             Self::Component(c) => c,
             _ => panic!("should be a component because of the repeater_component pass"),
+        }
+    }
+
+    /// Returns the Slint type name if applicable (for example `Rectangle` or `MyButton` when `component MyButton {}` is used as `MyButton` element)
+    pub fn type_name(&self) -> Option<&str> {
+        match self {
+            ElementType::Component(component) => Some(&component.id),
+            ElementType::Builtin(b) => Some(&b.name),
+            ElementType::Native(_) => None, // Too late, caller should call this function before the native class lowering
+            ElementType::Error => None,
+            ElementType::Global => None,
         }
     }
 }

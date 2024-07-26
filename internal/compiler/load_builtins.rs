@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
     Parse the contents of builtins.slint and fill the builtin type registry
@@ -22,7 +22,7 @@ use crate::typeregister::TypeRegister;
 /// At this point, it really should already contain the basic Types (string, int, ...)
 pub(crate) fn load_builtins(register: &mut TypeRegister) {
     let mut diag = crate::diagnostics::BuildDiagnostics::default();
-    let node = crate::parser::parse(include_str!("builtins.slint").into(), None, &mut diag);
+    let node = crate::parser::parse(include_str!("builtins.slint").into(), None, None, &mut diag);
     if !diag.is_empty() {
         let vec = diag.to_string_vec();
         #[cfg(feature = "display-diagnostics")]
@@ -197,7 +197,7 @@ pub(crate) fn load_builtins(register: &mut TypeRegister) {
             .collect();
         if let Some(builtin_name) = exports.get(&id) {
             if !matches!(&base, Base::Global) {
-                builtin.name = builtin_name.clone();
+                builtin.name.clone_from(builtin_name);
                 register.add_builtin(Rc::new(builtin));
             } else {
                 let glob = Rc::new(Component {
@@ -243,7 +243,7 @@ fn compiled(
         &mut crate::lookup::LookupCtx::empty_context(type_register, &mut diag),
     )
     .maybe_convert_to(ty, &node, &mut diag);
-    if diag.has_error() {
+    if diag.has_errors() {
         let vec = diag.to_string_vec();
         #[cfg(feature = "display-diagnostics")]
         diag.print();

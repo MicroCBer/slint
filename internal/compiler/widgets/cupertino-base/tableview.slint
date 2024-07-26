@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { CupertinoPalette, CupertinoFontSettings, Icons } from "styling.slint";
 import { ListView } from "../common/listview.slint";
@@ -15,7 +15,7 @@ component TableViewColumn inherits Rectangle {
 
     states [
         pressed when i-touch-area.pressed : {
-            background: CupertinoPalette.surface-secondary;
+            background: CupertinoPalette.secondary-control-background;
         }
     ]
 
@@ -98,7 +98,7 @@ component TableViewRow inherits Rectangle {
 
     states [
         selected when root.selected : {
-            i-background.background: CupertinoPalette.accent;
+            i-background.background: CupertinoPalette.accent-background;
         }
     ]
 
@@ -112,7 +112,7 @@ component TableViewRow inherits Rectangle {
     }
 
     i-background := Rectangle {
-        background: root.even ? CupertinoPalette.background-tertiary : CupertinoPalette.background-alt;
+        background: root.even ? CupertinoPalette.tertiary-background : CupertinoPalette.alternate-background;
     }
 
     i-layout := HorizontalLayout {
@@ -173,13 +173,14 @@ export component StandardTableView {
     horizontal-stretch: 1;
     vertical-stretch: 1;
     forward-focus: i-focus-scope;
+    accessible-role: table;
 
     VerticalLayout {
         Rectangle {
             clip: true;
             vertical-stretch: 0;
             min-height: i-header-layout.min-height;
-            background: CupertinoPalette.background-tertiary;
+            background: CupertinoPalette.tertiary-background;
 
             i-header-layout := HorizontalLayout {
                 width: max(self.preferred-width, parent.width);

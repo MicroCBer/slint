@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Pass that lowers synthetic `visible` properties to Clip element
 
@@ -54,7 +54,7 @@ pub fn handle_visible(
                             .property_analysis
                             .borrow()
                             .get("visible")
-                            .map_or(false, |a| a.is_set))
+                            .map_or(false, |a| a.is_set || a.is_linked))
             };
 
             for mut child in old_children {

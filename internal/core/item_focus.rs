@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore nesw
 
@@ -65,7 +65,7 @@ mod tests {
 
     use crate::item_tree::ItemTreeNode;
 
-    fn validate_focus_chains<'a>(item_tree: ItemTreeNodeArray<'a>) {
+    fn validate_focus_chains(item_tree: ItemTreeNodeArray<'_>) {
         let forward_chain = {
             let mut tmp = alloc::vec::Vec::with_capacity(item_tree.node_count());
             let mut node = 0;

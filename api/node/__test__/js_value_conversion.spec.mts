@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import test from 'ava';
 import * as path from 'node:path';
@@ -14,9 +14,9 @@ const dirname = path.dirname(filename);
 test('get/set string properties', (t) => {
   let compiler = new private_api.ComponentCompiler;
   let definition = compiler.buildFromSource(`export component App { in-out property <string> name: "Initial"; }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   t.is(instance!.getProperty("name"), "Initial");
@@ -50,9 +50,9 @@ test('get/set number properties', (t) => {
     export component App {
         in-out property <float> age: 42;
     }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   t.is(instance!.getProperty("age"), 42);
@@ -84,9 +84,9 @@ test('get/set bool properties', (t) => {
 
   let compiler = new private_api.ComponentCompiler;
   let definition = compiler.buildFromSource(`export component App { in-out property <bool> ready: true; }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   t.is(instance!.getProperty("ready"), true);
@@ -130,9 +130,9 @@ test('set struct properties', (t) => {
     };
   }
   `, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   t.deepEqual(instance!.getProperty("player"), {
@@ -153,18 +153,6 @@ test('set struct properties', (t) => {
     "energy_level": 0.8
   });
 
-  // Missing properties throw an exception (TODO: the message is not very helpful, should say which one)
-  const incomplete_struct_err = t.throws(() => {
-    instance!.setProperty("player", {
-      "name": "Incomplete Player"
-    })
-  }, {
-    instanceOf: Error
-  }
-  ) as any;
-  t.is(incomplete_struct_err!.code, 'InvalidArg');
-  t.is(incomplete_struct_err!.message, 'expect Number, got: Undefined');
-
   // Extra properties are thrown away
   instance!.setProperty("player", {
     "name": "Excessive Player",
@@ -177,6 +165,15 @@ test('set struct properties', (t) => {
     "age": 100,
     "energy_level": 0.8
   });
+
+  // Missing properties are defaulted
+  instance!.setProperty("player", { "age": 39 });
+  t.deepEqual(instance!.getProperty("player"), {
+    "name": "",
+    "age": 39,
+    "energy_level": 0.0
+  });
+
 })
 
 test('get/set image properties', async (t) => {
@@ -187,9 +184,9 @@ test('get/set image properties', async (t) => {
     in property <image> external-image;
     out property <bool> external-image-ok: self.external-image.width == 64 && self.external-image.height == 64;
   }`, filename);
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   let slintImage = instance!.getProperty("image");
@@ -217,9 +214,9 @@ test('get/set image properties', async (t) => {
       message: "Cannot convert object to image, because the provided object does not have an u32 `height` property"
     });
     t.throws(() => {
-      instance!.setProperty("external-image", { width: 1, height: 1, data: new Uint8ClampedArray() });
+      instance!.setProperty("external-image", { width: 1, height: 1, data: new Uint8ClampedArray(1) });
     }, {
-      message: "data property does not have the correct size; expected 1 (width) * 1 (height) * 4 = 0; got 4"
+      message: "data property does not have the correct size; expected 1 (width) * 1 (height) * 4 = 1; got 4"
     });
 
     t.is(image.bitmap.width, 64);
@@ -248,9 +245,9 @@ test('get/set brush properties', (t) => {
     in-out property <color> ref-color;
   }
   `, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   let black = instance!.getProperty("black");
@@ -422,14 +419,17 @@ test('ArrayModel', (t) => {
     in-out property <[string]> string-model;
     in-out property <[Player]> struct-model;
   }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
+
+  t.deepEqual(Array.from(new ArrayModel([3, 2, 1])), [3, 2, 1]);
 
   instance!.setProperty("int-model", new ArrayModel([10, 9, 8]));
 
   let intArrayModel = instance!.getProperty("int-model") as ArrayModel<number>;
+  t.deepEqual(intArrayModel.rowCount(), 3);
   t.deepEqual(intArrayModel.values(), new ArrayModel([10, 9, 8]).values());
 
   instance!.setProperty("string-model", new ArrayModel(["Simon", "Olivier", "Auri", "Tobias", "Florian"]));
@@ -449,9 +449,9 @@ test("MapModel", (t) => {
     export component App {
       in-out property <[string]> model;
     }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   interface Name {
@@ -482,6 +482,31 @@ test("MapModel", (t) => {
   t.is(checkModel.rowData(2), "Tisch, Roman");
 })
 
+test("MapModel undefined rowData sourcemodel", (t) => {
+  const nameModel: ArrayModel<Number> = new ArrayModel([
+    1, 2, 3
+  ]);
+
+  let mapFunctionCallCount = 0;
+  const mapModel = new private_api.MapModel<Number, String>(
+    nameModel,
+    (data) => {
+      mapFunctionCallCount++;
+      return data.toString();
+    }
+  );
+
+  for (let i = 0; i < mapModel.rowCount(); ++i) {
+    mapModel.rowData(i);
+  }
+  t.deepEqual(mapFunctionCallCount, mapModel.rowCount());
+  mapFunctionCallCount = 0;
+  t.is(nameModel.rowData(nameModel.rowCount()), undefined);
+  t.deepEqual(mapFunctionCallCount, 0);
+  t.is(mapModel.rowData(mapModel.rowCount()), undefined);
+  t.deepEqual(mapFunctionCallCount, 0);
+})
+
 test('ArrayModel rowCount', (t) => {
   let compiler = new private_api.ComponentCompiler;
   let definition = compiler.buildFromSource(`
@@ -489,9 +514,9 @@ test('ArrayModel rowCount', (t) => {
     out property <int> model-length: model.length;
     in-out property <[int]> model;
   }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   let model = new ArrayModel([10, 9, 8]);
@@ -513,9 +538,9 @@ test('ArrayModel rowData/setRowData', (t) => {
       model[row]
     }
   }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   let model = new ArrayModel([10, 9, 8]);
@@ -551,9 +576,9 @@ test('Model notify', (t) => {
     }
 
   }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   let model = new ArrayModel([100, 0]);
@@ -575,16 +600,28 @@ test('model from array', (t) => {
     in-out property <[int]> int-array;
     in-out property <[string]> string-array;
   }`, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
 
   instance!.setProperty("int-array", [10, 9, 8]);
-  t.deepEqual(instance!.getProperty("int-array"), [10, 9, 8]);
+  let wrapped_int_model = instance!.getProperty("int-array");
+  t.deepEqual(Array.from(wrapped_int_model), [10, 9, 8]);
+  t.deepEqual(wrapped_int_model.rowCount(), 3);
+  t.deepEqual(wrapped_int_model.rowData(0), 10);
+  t.deepEqual(wrapped_int_model.rowData(1), 9);
+  t.deepEqual(wrapped_int_model.rowData(2), 8);
+  t.deepEqual(Array.from(wrapped_int_model), [10, 9, 8]);
 
   instance!.setProperty("string-array", ["Simon", "Olivier", "Auri", "Tobias", "Florian"]);
-  t.deepEqual(instance!.getProperty("string-array"), ["Simon", "Olivier", "Auri", "Tobias", "Florian"]);
+  let wrapped_string_model = instance!.getProperty("string-array");
+  t.deepEqual(wrapped_string_model.rowCount(), 5);
+  t.deepEqual(wrapped_string_model.rowData(0), "Simon");
+  t.deepEqual(wrapped_string_model.rowData(1), "Olivier");
+  t.deepEqual(wrapped_string_model.rowData(2), "Auri");
+  t.deepEqual(wrapped_string_model.rowData(3), "Tobias");
+  t.deepEqual(wrapped_string_model.rowData(4), "Florian");
 })
 
 test('invoke callback', (t) => {
@@ -610,9 +647,9 @@ test('invoke callback', (t) => {
     }
   }
   `, "");
-  t.not(definition, null);
+  t.not(definition.App, null);
 
-  let instance = definition!.create();
+  let instance = definition.App!.create();
   t.not(instance, null);
   let speakTest;
 
@@ -630,14 +667,8 @@ test('invoke callback', (t) => {
   instance!.invoke("great-person", [{ "name": "simon" }]);
   t.deepEqual(speakTest, "hello simon");
 
-  t.throws(() => {
-    instance!.invoke("great-person", [{ "hello": "simon" }]);
-  },
-    {
-      code: "InvalidArg",
-      message: "expect String, got: Undefined"
-    }
-  );
+  instance!.invoke("great-person", [{ "hello": "simon" }]);
+  t.deepEqual(speakTest, "hello ");
 
   t.deepEqual(instance!.invoke("get-string", []), "string");
   t.deepEqual(instance!.invoke("person", []), { "name": "florian" });

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Code to help with writing tests for the language server
 
@@ -23,10 +23,15 @@ pub fn loaded_document_cache(
     content: String,
 ) -> (DocumentCache, Url, HashMap<Url, Vec<Diagnostic>>) {
     let mut dc = empty_document_cache();
+
+    // Pre-load std-widgets.slint:
+    spin_on::spin_on(dc.preload_builtins());
+
     let dummy_absolute_path =
         if cfg!(target_family = "windows") { "c://foo/bar.slint" } else { "/foo/bar.slint" };
     let url = Url::from_file_path(dummy_absolute_path).unwrap();
-    let diag = spin_on::spin_on(reload_document_impl(None, content, url.clone(), 42, &mut dc));
+    let diag =
+        spin_on::spin_on(reload_document_impl(None, content, url.clone(), Some(42), &mut dc));
     (dc, url, diag)
 }
 

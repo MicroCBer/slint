@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use anyhow::Context;
 use xshell::{cmd, Shell};
@@ -46,7 +46,7 @@ pub fn generate(sha1: Option<String>) -> Result<(), Box<dyn std::error::Error>> 
 
     let workspace_source =
         sh.read_file(root.join("Cargo.toml")).context("Failed to read workspace Cargo.toml")?;
-    let workspace_toml: toml_edit::Document =
+    let workspace_toml: toml_edit::DocumentMut =
         workspace_source.parse().context("Error parsing workspace Cargo.toml")?;
 
     let workspace_package_fields = workspace_toml
@@ -66,7 +66,8 @@ pub fn generate(sha1: Option<String>) -> Result<(), Box<dyn std::error::Error>> 
     let toml_source =
         sh.read_file(cargo_toml_path.clone()).context("Failed to read Node Cargo.toml")?;
 
-    let mut toml: toml_edit::Document = toml_source.parse().context("Error parsing Cargo.toml")?;
+    let mut toml: toml_edit::DocumentMut =
+        toml_source.parse().context("Error parsing Cargo.toml")?;
 
     // Replace workspace fields
     let package_table = toml["package"]
@@ -100,6 +101,11 @@ pub fn generate(sha1: Option<String>) -> Result<(), Box<dyn std::error::Error>> 
         toml["package"][&key_to_replace] = data;
     }
 
+    // Remove testing feature as we also remove the i-slint-backend-testing dependency below
+    if let Some(features_table) = toml["features"].as_table_mut() {
+        features_table.remove("testing");
+    }
+
     // Remove all `path = ` entries from dependencies and subsitute workspace = true
     for dep_key in ["dependencies", "build-dependencies"].iter() {
         let dep_table = match toml[dep_key].as_table_mut() {
@@ -107,6 +113,10 @@ pub fn generate(sha1: Option<String>) -> Result<(), Box<dyn std::error::Error>> 
             _ => continue,
         };
         let deps: Vec<_> = dep_table.iter().map(|(name, _)| name.to_string()).collect();
+
+        // Remove testing backend as it's not published
+        dep_table.remove("i-slint-backend-testing");
+
         deps.iter().for_each(|name| {
             if let Some(dep_config) = dep_table[name].as_inline_table_mut() {
                 if name.contains("slint") {

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #[cfg(test)]
 mod interpreter;
@@ -20,7 +20,12 @@ macro_rules! test_example {
                     absolute_path = legacy.into();
                 }
             }
-            interpreter::test(&test_driver_lib::TestCase { absolute_path, relative_path }).unwrap();
+            interpreter::test(&test_driver_lib::TestCase {
+                absolute_path,
+                relative_path,
+                requested_style: None,
+            })
+            .unwrap();
         }
     };
 }

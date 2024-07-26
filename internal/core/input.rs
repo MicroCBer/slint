@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*! Module handling mouse events
 */
@@ -15,10 +15,12 @@ use crate::timers::Timer;
 use crate::window::{WindowAdapter, WindowInner};
 use crate::{Coord, Property, SharedString};
 use alloc::rc::Rc;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 use const_field_offset::FieldOffsets;
 use core::cell::Cell;
 use core::pin::Pin;
+use core::time::Duration;
 
 /// A mouse or touch event
 ///
@@ -72,6 +74,16 @@ impl MouseEvent {
         };
         if let Some(pos) = pos {
             *pos += vec;
+        }
+    }
+
+    /// Set the click count of the pressed or released event
+    fn set_click_count(&mut self, count: u8) {
+        match self {
+            MouseEvent::Pressed { click_count, .. } | MouseEvent::Released { click_count, .. } => {
+                *click_count = count
+            }
+            _ => (),
         }
     }
 }
@@ -457,7 +469,7 @@ pub enum FocusEvent {
     WindowLostFocus,
 }
 
-/// This state is used to count the clicks in the `click_interval` from the `PLATFORM_INSTANCE`.
+/// This state is used to count the clicks separated by [`crate::platform::Platform::click_interval`]
 #[derive(Default)]
 pub struct ClickState {
     click_count_time_stamp: Cell<Option<crate::animations::Instant>>,
@@ -475,17 +487,20 @@ impl ClickState {
         self.click_button.set(button);
     }
 
+    /// Reset to an invalid state
+    pub fn reset(&self) {
+        self.click_count.set(0);
+        self.click_count_time_stamp.replace(None);
+    }
+
     /// Check if the click is repeated.
-    pub fn check_repeat(&self, mouse_event: MouseEvent) -> MouseEvent {
+    pub fn check_repeat(&self, mouse_event: MouseEvent, click_interval: Duration) -> MouseEvent {
         match mouse_event {
             MouseEvent::Pressed { position, button, .. } => {
                 let instant_now = crate::animations::Instant::now();
 
                 if let Some(click_count_time_stamp) = self.click_count_time_stamp.get() {
-                    if instant_now - click_count_time_stamp
-                        < crate::platform::PLATFORM_INSTANCE
-                            .with(|p| p.get().map(|p| p.click_interval()))
-                            .unwrap_or_default()
+                    if instant_now - click_count_time_stamp < click_interval
                         && button == self.click_button.get()
                         && (position - self.click_position.get()).square_length() < 100 as _
                     {
@@ -530,6 +545,18 @@ pub struct MouseInputState {
     grabbed: bool,
     delayed: Option<(crate::timers::Timer, MouseEvent)>,
     delayed_exit_items: Vec<ItemWeak>,
+}
+
+impl MouseInputState {
+    /// Return the item in the top of the stack
+    fn top_item(&self) -> Option<ItemRc> {
+        self.item_stack.last().and_then(|x| x.0.upgrade())
+    }
+
+    /// Returns the item in the top of the stack, if there is a delayed event, this would be the top of the delayed stack
+    pub fn top_item_including_delayed(&self) -> Option<ItemRc> {
+        self.delayed_exit_items.last().and_then(|x| x.upgrade()).or_else(|| self.top_item())
+    }
 }
 
 /// Try to handle the mouse grabber. Return None if the event has been handled, otherwise
@@ -587,19 +614,19 @@ pub(crate) fn handle_mouse_grab(
         return Some(mouse_event);
     }
 
-    let grabber = mouse_input_state.item_stack.last().unwrap().0.upgrade().unwrap();
+    let grabber = mouse_input_state.top_item().unwrap();
     let input_result = grabber.borrow().as_ref().input_event(event, window_adapter, &grabber);
     if input_result != InputEventResult::GrabMouse {
         mouse_input_state.grabbed = false;
         // Return a move event so that the new position can be registered properly
-        return Some(
+        Some(
             mouse_event
                 .position()
                 .map_or(MouseEvent::Exit, |position| MouseEvent::Moved { position }),
-        );
+        )
+    } else {
+        None
     }
-
-    None
 }
 
 pub(crate) fn send_exit_events(
@@ -648,7 +675,14 @@ pub fn process_mouse_input(
 ) -> MouseInputState {
     let mut result = MouseInputState::default();
     let root = ItemRc::new(component.clone(), 0);
-    let r = send_mouse_event_to_item(mouse_event, root, window_adapter, &mut result, false);
+    let r = send_mouse_event_to_item(
+        mouse_event,
+        root,
+        window_adapter,
+        &mut result,
+        mouse_input_state.top_item().as_ref(),
+        false,
+    );
     if mouse_input_state.delayed.is_some()
         && (!r.has_aborted()
             || Option::zip(result.item_stack.last(), mouse_input_state.item_stack.last())
@@ -684,7 +718,7 @@ pub(crate) fn process_delayed_event(
         None => return mouse_input_state,
     };
 
-    let top_item = match mouse_input_state.item_stack.last().unwrap().0.upgrade() {
+    let top_item = match mouse_input_state.top_item() {
         Some(i) => i,
         None => return MouseInputState::default(),
     };
@@ -696,6 +730,7 @@ pub(crate) fn process_delayed_event(
                 ItemRc::new(component.clone(), index),
                 window_adapter,
                 &mut mouse_input_state,
+                Some(&top_item),
                 true,
             )
         };
@@ -713,6 +748,7 @@ fn send_mouse_event_to_item(
     item_rc: ItemRc,
     window_adapter: &Rc<dyn WindowAdapter>,
     result: &mut MouseInputState,
+    last_top_item: Option<&ItemRc>,
     ignore_delays: bool,
 ) -> VisitChildrenResult {
     let item = item_rc.borrow();
@@ -744,7 +780,7 @@ fn send_mouse_event_to_item(
             let w = Rc::downgrade(window_adapter);
             timer.start(
                 crate::timers::TimerMode::SingleShot,
-                core::time::Duration::from_millis(duration),
+                Duration::from_millis(duration),
                 move || {
                     if let Some(w) = w.upgrade() {
                         WindowInner::from_pub(w.window()).process_delayed_event();
@@ -768,6 +804,7 @@ fn send_mouse_event_to_item(
                     ItemRc::new(component.clone(), index),
                     window_adapter,
                     result,
+                    last_top_item,
                     ignore_delays,
                 )
             };
@@ -787,6 +824,9 @@ fn send_mouse_event_to_item(
     } else {
         let mut event = mouse_event;
         event.translate(-geom.origin.to_vector());
+        if last_top_item.map_or(true, |x| *x != item_rc) {
+            event.set_click_count(0);
+        }
         item.as_ref().input_event(event, window_adapter, &item_rc)
     };
     match r {
@@ -863,7 +903,7 @@ impl TextCursorBlinker {
             };
             self.cursor_blink_timer.start(
                 crate::timers::TimerMode::Repeated,
-                core::time::Duration::from_millis(500),
+                Duration::from_millis(500),
                 toggle_cursor,
             );
         }

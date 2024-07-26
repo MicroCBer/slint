@@ -1,16 +1,16 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 This module contains image decoding and caching related types for the run-time library.
 */
 
-use crate::lengths::PhysicalPx;
+use crate::lengths::{PhysicalPx, ScaleFactor};
 use crate::slice::Slice;
 use crate::{SharedString, SharedVector};
 
 use super::{IntRect, IntSize};
-use crate::items::ImageFit;
+use crate::items::{ImageFit, ImageHorizontalAlignment, ImageTiling, ImageVerticalAlignment};
 
 #[cfg(feature = "image-decoders")]
 pub mod cache;
@@ -41,6 +41,11 @@ OpaqueImageVTable_static! {
 OpaqueImageVTable_static! {
     /// VTable for RC wrapped HtmlImage helper struct.
     pub static HTML_IMAGE_VT for htmlimage::HTMLImage
+}
+
+OpaqueImageVTable_static! {
+    /// VTable for RC wrapped SVG helper struct.
+    pub static NINE_SLICE_VT for NineSliceImage
 }
 
 /// SharedPixelBuffer is a container for storing image data as pixels. It is
@@ -152,6 +157,7 @@ pub type Rgba8Pixel = rgb::RGBA8;
 /// images in pixels.
 #[derive(Clone, Debug)]
 #[repr(C)]
+/// TODO: Make this non_exhaustive before making the type public!
 pub enum SharedImageBuffer {
     /// This variant holds the data for an image where each pixel has three color channels (red, green,
     /// and blue) and each channel is encoded as unsigned byte.
@@ -306,6 +312,7 @@ impl ImageCacheKey {
             ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).cache_key(),
             #[cfg(not(target_arch = "wasm32"))]
             ImageInner::BorrowedOpenGLTexture(..) => return None,
+            ImageInner::NineSlice(nine) => vtable::VRc::borrow(nine).cache_key(),
         };
         if matches!(key, ImageCacheKey::Invalid) {
             None
@@ -317,6 +324,25 @@ impl ImageCacheKey {
     /// Returns a cache key for static embedded image data.
     pub fn from_embedded_image_data(data: &'static [u8]) -> Self {
         Self::EmbeddedData(data.as_ptr() as usize)
+    }
+}
+
+/// Represent a nine-slice image with the base image and the 4 borders
+pub struct NineSliceImage(pub ImageInner, pub [u16; 4]);
+
+impl NineSliceImage {
+    /// return the backing Image
+    pub fn image(&self) -> Image {
+        Image(self.0.clone())
+    }
+}
+
+impl OpaqueImage for NineSliceImage {
+    fn size(&self) -> IntSize {
+        self.0.size()
+    }
+    fn cache_key(&self) -> ImageCacheKey {
+        ImageCacheKey::new(&self.0).unwrap_or(ImageCacheKey::Invalid)
     }
 }
 
@@ -343,6 +369,7 @@ pub enum ImageInner {
     BackendStorage(vtable::VRc<OpaqueImageVTable>) = 5,
     #[cfg(not(target_arch = "wasm32"))]
     BorrowedOpenGLTexture(BorrowedOpenGLTexture) = 6,
+    NineSlice(vtable::VRc<OpaqueImageVTable, NineSliceImage>) = 7,
 }
 
 impl ImageInner {
@@ -427,6 +454,7 @@ impl ImageInner {
                 }
                 Some(SharedImageBuffer::RGBA8Premultiplied(buffer))
             }
+            ImageInner::NineSlice(nine) => nine.0.render_to_buffer(None),
             _ => None,
         }
     }
@@ -439,6 +467,23 @@ impl ImageInner {
             #[cfg(target_arch = "wasm32")]
             Self::HTMLImage(html_image) => html_image.is_svg(),
             _ => false,
+        }
+    }
+
+    /// Return the image size
+    pub fn size(&self) -> IntSize {
+        match self {
+            ImageInner::None => Default::default(),
+            ImageInner::EmbeddedImage { buffer, .. } => buffer.size(),
+            ImageInner::StaticTextures(StaticTextures { original_size, .. }) => *original_size,
+            #[cfg(feature = "svg")]
+            ImageInner::Svg(svg) => svg.size(),
+            #[cfg(target_arch = "wasm32")]
+            ImageInner::HTMLImage(htmlimage) => htmlimage.size().unwrap_or_default(),
+            ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).size(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ImageInner::BorrowedOpenGLTexture(BorrowedOpenGLTexture { size, .. }) => *size,
+            ImageInner::NineSlice(nine) => nine.0.size(),
         }
     }
 }
@@ -458,6 +503,7 @@ impl PartialEq for ImageInner {
             (Self::BackendStorage(l0), Self::BackendStorage(r0)) => vtable::VRc::ptr_eq(l0, r0),
             #[cfg(not(target_arch = "wasm32"))]
             (Self::BorrowedOpenGLTexture(l0), Self::BorrowedOpenGLTexture(r0)) => l0 == r0,
+            (Self::NineSlice(l), Self::NineSlice(r)) => l.0 == r.0 && l.1 == r.1,
             _ => false,
         }
     }
@@ -622,6 +668,86 @@ impl Image {
         })
     }
 
+    /// Returns the pixel buffer for the Image if available in RGB format without alpha.
+    /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
+    pub fn to_rgb8(&self) -> Option<SharedPixelBuffer<Rgb8Pixel>> {
+        self.0.render_to_buffer(None).and_then(|image| match image {
+            SharedImageBuffer::RGB8(buffer) => Some(buffer),
+            _ => None,
+        })
+    }
+
+    /// Returns the pixel buffer for the Image if available in RGBA format.
+    /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
+    pub fn to_rgba8(&self) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+        self.0.render_to_buffer(None).and_then(|image| match image {
+            SharedImageBuffer::RGB8(buffer) => Some(SharedPixelBuffer::<Rgba8Pixel> {
+                width: buffer.width,
+                height: buffer.height,
+                data: buffer.data.into_iter().map(Into::into).collect(),
+            }),
+            SharedImageBuffer::RGBA8(buffer) => Some(buffer),
+            SharedImageBuffer::RGBA8Premultiplied(buffer) => {
+                Some(SharedPixelBuffer::<Rgba8Pixel> {
+                    width: buffer.width,
+                    height: buffer.height,
+                    data: buffer
+                        .data
+                        .into_iter()
+                        .map(|rgba_premul| {
+                            if rgba_premul.a == 0 {
+                                Rgba8Pixel::new(0, 0, 0, 0)
+                            } else {
+                                let af = rgba_premul.a as f32 / 255.0;
+                                Rgba8Pixel {
+                                    r: (rgba_premul.r as f32 * 255. / af) as u8,
+                                    g: (rgba_premul.g as f32 * 255. / af) as u8,
+                                    b: (rgba_premul.b as f32 * 255. / af) as u8,
+                                    a: rgba_premul.a,
+                                }
+                            }
+                        })
+                        .collect(),
+                })
+            }
+        })
+    }
+
+    /// Returns the pixel buffer for the Image if available in RGBA format, with the alpha channel pre-multiplied
+    /// to the red, green, and blue channels.
+    /// Returns None if the pixels cannot be obtained, for example when the image was created from borrowed OpenGL textures.
+    pub fn to_rgba8_premultiplied(&self) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+        self.0.render_to_buffer(None).and_then(|image| match image {
+            SharedImageBuffer::RGB8(buffer) => Some(SharedPixelBuffer::<Rgba8Pixel> {
+                width: buffer.width,
+                height: buffer.height,
+                data: buffer.data.into_iter().map(Into::into).collect(),
+            }),
+            SharedImageBuffer::RGBA8(buffer) => Some(SharedPixelBuffer::<Rgba8Pixel> {
+                width: buffer.width,
+                height: buffer.height,
+                data: buffer
+                    .data
+                    .into_iter()
+                    .map(|rgba| {
+                        if rgba.a == 255 {
+                            rgba
+                        } else {
+                            let af = rgba.a as f32 / 255.0;
+                            Rgba8Pixel {
+                                r: (rgba.r as f32 * af / 255.) as u8,
+                                g: (rgba.g as f32 * af / 255.) as u8,
+                                b: (rgba.b as f32 * af / 255.) as u8,
+                                a: rgba.a,
+                            }
+                        }
+                    })
+                    .collect(),
+            }),
+            SharedImageBuffer::RGBA8Premultiplied(buffer) => Some(buffer),
+        })
+    }
+
     /// Creates a new Image from an existing OpenGL texture. The texture remains borrowed by Slint
     /// for the duration of being used for rendering, such as when assigned as source property to
     /// an `Image` element. It's the application's responsibility to delete the texture when it is
@@ -660,20 +786,30 @@ impl Image {
         ))))
     }
 
+    /// Sets the nine-slice edges of the image.
+    ///
+    /// [Nine-slice scaling](https://en.wikipedia.org/wiki/9-slice_scaling) is a method for scaling
+    /// images in such a way that the corners are not distorted.
+    /// The arguments define the pixel sizes of the edges that cut the image into 9 slices.
+    pub fn set_nine_slice_edges(&mut self, top: u16, right: u16, bottom: u16, left: u16) {
+        if top == 0 && left == 0 && right == 0 && bottom == 0 {
+            if let ImageInner::NineSlice(n) = &self.0 {
+                self.0 = n.0.clone();
+            }
+        } else {
+            let array = [top, right, bottom, left];
+            let inner = if let ImageInner::NineSlice(n) = &mut self.0 {
+                n.0.clone()
+            } else {
+                self.0.clone()
+            };
+            self.0 = ImageInner::NineSlice(vtable::VRc::new(NineSliceImage(inner, array)));
+        }
+    }
+
     /// Returns the size of the Image in pixels.
     pub fn size(&self) -> IntSize {
-        match &self.0 {
-            ImageInner::None => Default::default(),
-            ImageInner::EmbeddedImage { buffer, .. } => buffer.size(),
-            ImageInner::StaticTextures(StaticTextures { original_size, .. }) => *original_size,
-            #[cfg(feature = "svg")]
-            ImageInner::Svg(svg) => svg.size(),
-            #[cfg(target_arch = "wasm32")]
-            ImageInner::HTMLImage(htmlimage) => htmlimage.size().unwrap_or_default(),
-            ImageInner::BackendStorage(x) => vtable::VRc::borrow(x).size(),
-            #[cfg(not(target_arch = "wasm32"))]
-            ImageInner::BorrowedOpenGLTexture(BorrowedOpenGLTexture { size, .. }) => *size,
-        }
+        self.0.size()
     }
 
     #[cfg(feature = "std")]
@@ -693,6 +829,12 @@ impl Image {
             ImageInner::EmbeddedImage { cache_key: ImageCacheKey::Path(path), .. } => {
                 Some(std::path::Path::new(path.as_str()))
             }
+            ImageInner::NineSlice(nine) => match &nine.0 {
+                ImageInner::EmbeddedImage { cache_key: ImageCacheKey::Path(path), .. } => {
+                    Some(std::path::Path::new(path.as_str()))
+                }
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -773,9 +915,7 @@ impl BorrowedOpenGLTextureBuilder {
 #[cfg(feature = "image-decoders")]
 pub fn load_image_from_embedded_data(data: Slice<'static, u8>, format: Slice<'_, u8>) -> Image {
     self::cache::IMAGE_CACHE.with(|global_cache| {
-        global_cache.borrow_mut().load_image_from_embedded_data(data, format).unwrap_or_else(|| {
-            panic!("internal error: embedded image data is not supported by run-time library",)
-        })
+        global_cache.borrow_mut().load_image_from_embedded_data(data, format).unwrap_or_default()
     })
 }
 
@@ -783,11 +923,15 @@ pub fn load_image_from_embedded_data(data: Slice<'static, u8>, format: Slice<'_,
 fn test_image_size_from_buffer_without_backend() {
     {
         assert_eq!(Image::default().size(), Default::default());
+        assert!(Image::default().to_rgb8().is_none());
+        assert!(Image::default().to_rgba8().is_none());
+        assert!(Image::default().to_rgba8_premultiplied().is_none());
     }
     {
         let buffer = SharedPixelBuffer::<Rgb8Pixel>::new(320, 200);
-        let image = Image::from_rgb8(buffer);
-        assert_eq!(image.size(), [320, 200].into())
+        let image = Image::from_rgb8(buffer.clone());
+        assert_eq!(image.size(), [320, 200].into());
+        assert_eq!(image.to_rgb8().as_ref().map(|b| b.as_slice()), Some(buffer.as_slice()));
     }
 }
 
@@ -797,6 +941,7 @@ fn test_image_size_from_svg() {
     let simple_svg = r#"<svg width="320" height="200" xmlns="http://www.w3.org/2000/svg"></svg>"#;
     let image = Image::load_from_svg_data(simple_svg.as_bytes()).unwrap();
     assert_eq!(image.size(), [320, 200].into());
+    assert_eq!(image.to_rgba8().unwrap().size(), image.size());
 }
 
 #[cfg(feature = "svg")]
@@ -807,26 +952,256 @@ fn test_image_invalid_svg() {
     assert!(result.is_err());
 }
 
-/// Return an size that can be used to render an image in a buffer that matches a given ImageFit
-pub fn fit_size(
+/// The result of the fit function
+#[derive(Debug)]
+pub struct FitResult {
+    /// The clip rect in the source image (in source image coordinate)
+    pub clip_rect: IntRect,
+    /// The scale to apply to go from the source to the target horizontally
+    pub source_to_target_x: f32,
+    /// The scale to apply to go from the source to the target vertically
+    pub source_to_target_y: f32,
+    /// The size of the target
+    pub size: euclid::Size2D<f32, PhysicalPx>,
+    /// The offset in the target in which we draw the image
+    pub offset: euclid::Point2D<f32, PhysicalPx>,
+    /// When Some, it means the image should be tiled instead of stretched to the target
+    /// but still scaled with the source_to_target_x and source_to_target_y factor
+    /// The point is the coordinate within the image's clip_rect of the pixel at the offset
+    pub tiled: Option<euclid::default::Point2D<u32>>,
+}
+
+impl FitResult {
+    fn adjust_for_tiling(
+        self,
+        ratio: f32,
+        alignment: (ImageHorizontalAlignment, ImageVerticalAlignment),
+        tiling: (ImageTiling, ImageTiling),
+    ) -> Self {
+        let mut r = self;
+        let mut tiled = euclid::Point2D::default();
+        let target = r.size;
+        let o = r.clip_rect.size.cast::<f32>();
+        match tiling.0 {
+            ImageTiling::None => {
+                r.size.width = o.width * r.source_to_target_x;
+                if (o.width as f32) > target.width / r.source_to_target_x {
+                    let diff = (o.width as f32 - target.width / r.source_to_target_x) as i32;
+                    r.clip_rect.size.width -= diff;
+                    r.clip_rect.origin.x += match alignment.0 {
+                        ImageHorizontalAlignment::Center => diff / 2,
+                        ImageHorizontalAlignment::Left => 0,
+                        ImageHorizontalAlignment::Right => diff,
+                    };
+                    r.size.width = target.width;
+                } else if (o.width as f32) < target.width / r.source_to_target_x {
+                    r.offset.x += match alignment.0 {
+                        ImageHorizontalAlignment::Center => {
+                            (target.width - o.width as f32 * r.source_to_target_x) / 2.
+                        }
+                        ImageHorizontalAlignment::Left => 0.,
+                        ImageHorizontalAlignment::Right => {
+                            target.width - o.width as f32 * r.source_to_target_x
+                        }
+                    };
+                }
+            }
+            ImageTiling::Repeat => {
+                tiled.x = match alignment.0 {
+                    ImageHorizontalAlignment::Left => 0,
+                    ImageHorizontalAlignment::Center => {
+                        ((o.width - target.width / ratio) / 2.).rem_euclid(o.width) as u32
+                    }
+                    ImageHorizontalAlignment::Right => {
+                        (-target.width / ratio).rem_euclid(o.width) as u32
+                    }
+                };
+                r.source_to_target_x = ratio;
+            }
+            ImageTiling::Round => {
+                if target.width / ratio <= o.width * 1.5 {
+                    r.source_to_target_x = target.width / o.width;
+                } else {
+                    let mut rem = (target.width / ratio).rem_euclid(o.width);
+                    if rem > o.width / 2. {
+                        rem -= o.width;
+                    }
+                    r.source_to_target_x = ratio * target.width / (target.width - rem * ratio);
+                }
+            }
+        }
+
+        match tiling.1 {
+            ImageTiling::None => {
+                r.size.height = o.height * r.source_to_target_y;
+                if (o.height as f32) > target.height / r.source_to_target_y {
+                    let diff = (o.height as f32 - target.height / r.source_to_target_y) as i32;
+                    r.clip_rect.size.height -= diff;
+                    r.clip_rect.origin.y += match alignment.1 {
+                        ImageVerticalAlignment::Center => diff / 2,
+                        ImageVerticalAlignment::Top => 0,
+                        ImageVerticalAlignment::Bottom => diff,
+                    };
+                    r.size.height = target.height;
+                } else if (o.height as f32) < target.height / r.source_to_target_y {
+                    r.offset.y += match alignment.1 {
+                        ImageVerticalAlignment::Center => {
+                            (target.height - o.height as f32 * r.source_to_target_y) / 2.
+                        }
+                        ImageVerticalAlignment::Top => 0.,
+                        ImageVerticalAlignment::Bottom => {
+                            target.height - o.height as f32 * r.source_to_target_y
+                        }
+                    };
+                }
+            }
+            ImageTiling::Repeat => {
+                tiled.y = match alignment.1 {
+                    ImageVerticalAlignment::Top => 0,
+                    ImageVerticalAlignment::Center => {
+                        ((o.height - target.height / ratio) / 2.).rem_euclid(o.height) as u32
+                    }
+                    ImageVerticalAlignment::Bottom => {
+                        (-target.height / ratio).rem_euclid(o.height) as u32
+                    }
+                };
+                r.source_to_target_y = ratio;
+            }
+            ImageTiling::Round => {
+                if target.height / ratio <= o.height * 1.5 {
+                    r.source_to_target_y = target.height / o.height;
+                } else {
+                    let mut rem = (target.height / ratio).rem_euclid(o.height);
+                    if rem > o.height / 2. {
+                        rem -= o.height;
+                    }
+                    r.source_to_target_y = ratio * target.height / (target.height - rem * ratio);
+                }
+            }
+        }
+        let has_tiling = tiling != (ImageTiling::None, ImageTiling::None);
+        r.tiled = has_tiling.then_some(tiled);
+        r
+    }
+}
+
+#[cfg(not(feature = "std"))]
+trait RemEuclid {
+    fn rem_euclid(self, b: f32) -> f32;
+}
+#[cfg(not(feature = "std"))]
+impl RemEuclid for f32 {
+    fn rem_euclid(self, b: f32) -> f32 {
+        return num_traits::Euclid::rem_euclid(&self, &b);
+    }
+}
+
+/// Return an FitResult that can be used to render an image in a buffer that matches a given ImageFit
+pub fn fit(
     image_fit: ImageFit,
     target: euclid::Size2D<f32, PhysicalPx>,
-    origin: IntSize,
-) -> euclid::Size2D<f32, PhysicalPx> {
-    let o = origin.cast::<f32>();
+    source_rect: IntRect,
+    scale_factor: ScaleFactor,
+    alignment: (ImageHorizontalAlignment, ImageVerticalAlignment),
+    tiling: (ImageTiling, ImageTiling),
+) -> FitResult {
+    let has_tiling = tiling != (ImageTiling::None, ImageTiling::None);
+    let o = source_rect.size.cast::<f32>();
     let ratio = match image_fit {
-        ImageFit::Fill => return target,
+        // If there is any tiling, we ignore image_fit
+        _ if has_tiling => scale_factor.get(),
+        ImageFit::Fill => {
+            return FitResult {
+                clip_rect: source_rect,
+                source_to_target_x: target.width / o.width,
+                source_to_target_y: target.height / o.height,
+                size: target,
+                offset: Default::default(),
+                tiled: None,
+            }
+        }
+        ImageFit::Preserve => scale_factor.get(),
         ImageFit::Contain => f32::min(target.width / o.width, target.height / o.height),
         ImageFit::Cover => f32::max(target.width / o.width, target.height / o.height),
     };
-    euclid::Size2D::from_untyped(o * ratio)
+
+    FitResult {
+        clip_rect: source_rect,
+        source_to_target_x: ratio,
+        source_to_target_y: ratio,
+        size: target,
+        offset: euclid::Point2D::default(),
+        tiled: None,
+    }
+    .adjust_for_tiling(ratio, alignment, tiling)
+}
+
+/// Generate an iterator of  [`FitResult`] for each slice of a nine-slice border image
+pub fn fit9slice(
+    source_rect: IntSize,
+    [t, r, b, l]: [u16; 4],
+    target: euclid::Size2D<f32, PhysicalPx>,
+    scale_factor: ScaleFactor,
+    alignment: (ImageHorizontalAlignment, ImageVerticalAlignment),
+    tiling: (ImageTiling, ImageTiling),
+) -> impl Iterator<Item = FitResult> {
+    let fit_to = |clip_rect: euclid::default::Rect<u16>, target: euclid::Rect<f32, PhysicalPx>| {
+        (!clip_rect.is_empty() && !target.is_empty()).then(|| {
+            FitResult {
+                clip_rect: clip_rect.cast(),
+                source_to_target_x: target.width() / clip_rect.width() as f32,
+                source_to_target_y: target.height() / clip_rect.height() as f32,
+                size: target.size,
+                offset: target.origin,
+                tiled: None,
+            }
+            .adjust_for_tiling(scale_factor.get(), alignment, tiling)
+        })
+    };
+    use euclid::rect;
+    let sf = |x| scale_factor.get() * x as f32;
+    let source = source_rect.cast::<u16>();
+    if t + b > source.height || l + r > source.width {
+        [None, None, None, None, None, None, None, None, None]
+    } else {
+        [
+            fit_to(rect(0, 0, l, t), rect(0., 0., sf(l), sf(t))),
+            fit_to(
+                rect(l, 0, source.width - l - r, t),
+                rect(sf(l), 0., target.width - sf(l) - sf(r), sf(t)),
+            ),
+            fit_to(rect(source.width - r, 0, r, t), rect(target.width - sf(r), 0., sf(r), sf(t))),
+            fit_to(
+                rect(0, t, l, source.height - t - b),
+                rect(0., sf(t), sf(l), target.height - sf(t) - sf(b)),
+            ),
+            fit_to(
+                rect(l, t, source.width - l - r, source.height - t - b),
+                rect(sf(l), sf(t), target.width - sf(l) - sf(r), target.height - sf(t) - sf(b)),
+            ),
+            fit_to(
+                rect(source.width - r, t, r, source.height - t - b),
+                rect(target.width - sf(r), sf(t), sf(r), target.height - sf(t) - sf(b)),
+            ),
+            fit_to(rect(0, source.height - b, l, b), rect(0., target.height - sf(b), sf(l), sf(b))),
+            fit_to(
+                rect(l, source.height - b, source.width - l - r, b),
+                rect(sf(l), target.height - sf(b), target.width - sf(l) - sf(r), sf(b)),
+            ),
+            fit_to(
+                rect(source.width - r, source.height - b, r, b),
+                rect(target.width - sf(r), target.height - sf(b), sf(r), sf(b)),
+            ),
+        ]
+    }
+    .into_iter()
+    .flatten()
 }
 
 #[cfg(feature = "ffi")]
 pub(crate) mod ffi {
     #![allow(unsafe_code)]
 
-    use super::super::IntSize;
     use super::*;
 
     // Expand Rgb8Pixel so that cbindgen can see it. (is in fact rgb::RGB<u8>)
@@ -882,10 +1257,17 @@ pub(crate) mod ffi {
     }
 
     #[no_mangle]
-    pub unsafe extern "C" fn slint_image_path(image: &Image) -> Option<&SharedString> {
+    pub extern "C" fn slint_image_path(image: &Image) -> Option<&SharedString> {
         match &image.0 {
             ImageInner::EmbeddedImage { cache_key, .. } => match cache_key {
                 ImageCacheKey::Path(path) => Some(path),
+                _ => None,
+            },
+            ImageInner::NineSlice(nine) => match &nine.0 {
+                ImageInner::EmbeddedImage { cache_key, .. } => match cache_key {
+                    ImageCacheKey::Path(path) => Some(path),
+                    _ => None,
+                },
                 _ => None,
             },
             _ => None,
@@ -903,6 +1285,18 @@ pub(crate) mod ffi {
     #[no_mangle]
     pub unsafe extern "C" fn slint_image_compare_equal(image1: &Image, image2: &Image) -> bool {
         return image1.eq(image2);
+    }
+
+    /// Call [`Image::set_nine_slice_edges`]
+    #[no_mangle]
+    pub extern "C" fn slint_image_set_nine_slice_edges(
+        image: &mut Image,
+        top: u16,
+        right: u16,
+        bottom: u16,
+        left: u16,
+    ) {
+        image.set_nine_slice_edges(top, right, bottom, left);
     }
 }
 

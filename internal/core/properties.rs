@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
     Property binding engine.
@@ -16,6 +16,7 @@
 /// A singled linked list whose nodes are pinned
 mod single_linked_list_pin {
     #![allow(unsafe_code)]
+    #[cfg(not(feature = "std"))]
     use alloc::boxed::Box;
     use core::pin::Pin;
 
@@ -116,15 +117,50 @@ pub(crate) mod dependency_tracker {
     impl<T> DependencyListHead<T> {
         pub unsafe fn mem_move(from: *mut Self, to: *mut Self) {
             (*to).0.set((*from).0.get());
-            if let Some(next) = ((*from).0.get() as *const DependencyNode<T>).as_ref() {
+            if let Some(next) = (*from).0.get().as_ref() {
                 debug_assert_eq!(from as *const _, next.prev.get() as *const _);
                 next.debug_assert_valid();
                 next.prev.set(to as *const _);
                 next.debug_assert_valid();
             }
         }
+
+        /// Swap two list head
+        pub fn swap(from: Pin<&Self>, to: Pin<&Self>) {
+            Cell::swap(&from.0, &to.0);
+            unsafe {
+                if let Some(n) = from.0.get().as_ref() {
+                    debug_assert_eq!(n.prev.get() as *const _, &to.0 as *const _);
+                    n.prev.set(&from.0 as *const _);
+                    n.debug_assert_valid();
+                }
+
+                if let Some(n) = to.0.get().as_ref() {
+                    debug_assert_eq!(n.prev.get() as *const _, &from.0 as *const _);
+                    n.prev.set(&to.0 as *const _);
+                    n.debug_assert_valid();
+                }
+            }
+        }
+
+        /// Return true is the list is empty
+        pub fn is_empty(&self) -> bool {
+            self.0.get().is_null()
+        }
+
+        /// Remove all the nodes from the list;
+        pub fn clear(self: Pin<&Self>) {
+            unsafe {
+                if let Some(n) = self.0.get().as_ref() {
+                    n.debug_assert_valid();
+                    n.prev.set(core::ptr::null());
+                }
+            }
+            self.0.set(core::ptr::null());
+        }
+
         pub unsafe fn drop(_self: *mut Self) {
-            if let Some(next) = ((*_self).0.get() as *const DependencyNode<T>).as_ref() {
+            if let Some(next) = (*_self).0.get().as_ref() {
                 debug_assert_eq!(_self as *const _, next.prev.get() as *const _);
                 next.debug_assert_valid();
                 next.prev.set(core::ptr::null());
@@ -135,7 +171,7 @@ pub(crate) mod dependency_tracker {
             unsafe {
                 node.remove();
                 node.debug_assert_valid();
-                let old = self.0.get() as *const DependencyNode<T>;
+                let old = self.0.get();
                 if let Some(x) = old.as_ref() {
                     x.debug_assert_valid();
                 }
@@ -152,7 +188,7 @@ pub(crate) mod dependency_tracker {
 
         pub fn for_each(&self, mut f: impl FnMut(&T)) {
             unsafe {
-                let mut next = self.0.get() as *const DependencyNode<T>;
+                let mut next = self.0.get();
                 while let Some(node) = next.as_ref() {
                     node.debug_assert_valid();
                     next = node.next.get();
@@ -224,6 +260,7 @@ pub(crate) mod dependency_tracker {
 type DependencyListHead = dependency_tracker::DependencyListHead<*const BindingHolder>;
 type DependencyNode = dependency_tracker::DependencyNode<*const BindingHolder>;
 
+#[cfg(not(feature = "std"))]
 use alloc::boxed::Box;
 use alloc::rc::Rc;
 use core::cell::{Cell, RefCell, UnsafeCell};
@@ -1275,6 +1312,8 @@ fn property_two_ways_binding_of_two_two_way_bindings() {
     assert_eq!(p2_2.as_ref().get(), 9);
 }
 
+mod change_tracker;
+pub use change_tracker::*;
 mod properties_animations;
 pub use crate::items::StateInfo;
 pub use properties_animations::*;
@@ -1320,16 +1359,16 @@ pub fn set_state_binding(property: Pin<&Property<StateInfo>>, binding: impl Fn()
 
 #[doc(hidden)]
 pub trait PropertyDirtyHandler {
-    fn notify(&self);
+    fn notify(self: Pin<&Self>);
 }
 
 impl PropertyDirtyHandler for () {
-    fn notify(&self) {}
+    fn notify(self: Pin<&Self>) {}
 }
 
 impl<F: Fn()> PropertyDirtyHandler for F {
-    fn notify(&self) {
-        self()
+    fn notify(self: Pin<&Self>) {
+        (self.get_ref())()
     }
 }
 
@@ -1460,7 +1499,7 @@ impl<DirtyHandler: PropertyDirtyHandler> PropertyTracker<DirtyHandler> {
             was_dirty: bool,
         ) {
             if !was_dirty {
-                ((*(_self as *const BindingHolder<B>)).binding).notify();
+                Pin::new_unchecked(&(*(_self as *const BindingHolder<B>)).binding).notify();
             }
         }
 

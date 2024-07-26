@@ -1,144 +1,50 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![cfg(not(target_arch = "wasm32"))]
+#![allow(clippy::await_holding_refcell_ref)]
 
 #[cfg(all(feature = "preview-engine", not(feature = "preview-builtin")))]
 compile_error!("Feature preview-engine and preview-builtin need to be enabled together when building native LSP");
 
 mod common;
+mod fmt;
 mod language;
 pub mod lsp_ext;
 #[cfg(feature = "preview-engine")]
 mod preview;
 pub mod util;
 
-use common::{PreviewApi, Result};
+use common::Result;
 use language::*;
 
 use i_slint_compiler::CompilerConfiguration;
 use lsp_types::notification::{
     DidChangeConfiguration, DidChangeTextDocument, DidOpenTextDocument, Notification,
 };
-use lsp_types::{DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams};
+use lsp_types::{DidChangeTextDocumentParams, DidOpenTextDocumentParams, InitializeParams, Url};
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
+use itertools::Itertools;
 use lsp_server::{Connection, ErrorCode, IoThreads, Message, RequestId, Response};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{atomic, Arc, Mutex};
 use std::task::{Poll, Waker};
 
-struct Previewer {
-    #[allow(unused)]
-    server_notifier: ServerNotifier,
-    use_external_previewer: RefCell<bool>,
-    to_show: RefCell<Option<common::PreviewComponent>>,
-}
-
-impl PreviewApi for Previewer {
-    fn set_use_external_previewer(&self, _use_external: bool) {
-        // Only allow switching if both options are available
-        #[cfg(all(feature = "preview-builtin", feature = "preview-external"))]
-        {
-            self.use_external_previewer.replace(_use_external);
-
-            if _use_external {
-                preview::close_ui();
-            }
-        }
-    }
-
-    fn set_contents(&self, _path: &std::path::Path, _contents: &str) {
-        if *self.use_external_previewer.borrow() {
-            #[cfg(feature = "preview-external")]
-            let _ = self.server_notifier.send_notification(
-                "slint/lsp_to_preview".to_string(),
-                crate::common::LspToPreviewMessage::SetContents {
-                    path: _path.to_string_lossy().to_string(),
-                    contents: _contents.to_string(),
-                },
-            );
-        } else {
-            #[cfg(feature = "preview-builtin")]
-            preview::set_contents(_path, _contents.to_string());
-        }
-    }
-
-    fn load_preview(&self, component: common::PreviewComponent) {
-        self.to_show.replace(Some(component.clone()));
-
-        if *self.use_external_previewer.borrow() {
-            #[cfg(feature = "preview-external")]
-            let _ = self.server_notifier.send_notification(
-                "slint/lsp_to_preview".to_string(),
-                crate::common::LspToPreviewMessage::ShowPreview {
-                    path: component.path.to_string_lossy().to_string(),
-                    component: component.component,
-                    style: component.style.to_string(),
-                },
-            );
-        } else {
-            #[cfg(feature = "preview-builtin")]
-            {
-                preview::open_ui(&self.server_notifier);
-                preview::load_preview(component);
-            }
-        }
-    }
-
-    fn config_changed(&self, _config: crate::common::PreviewConfig) {
-        if *self.use_external_previewer.borrow() {
-            #[cfg(feature = "preview-external")]
-            let _ = self.server_notifier.send_notification(
-                "slint/lsp_to_preview".to_string(),
-                crate::common::LspToPreviewMessage::SetConfiguration { config: _config },
-            );
-        } else {
-            #[cfg(feature = "preview-builtin")]
-            preview::config_changed(_config);
-        }
-    }
-
-    fn highlight(&self, _path: Option<std::path::PathBuf>, _offset: u32) -> Result<()> {
-        {
-            if *self.use_external_previewer.borrow() {
-                #[cfg(feature = "preview-external")]
-                self.server_notifier.send_notification(
-                    "slint/lsp_to_preview".to_string(),
-                    crate::common::LspToPreviewMessage::HighlightFromEditor {
-                        path: _path.as_ref().map(|p| p.to_string_lossy().to_string()),
-                        offset: _offset,
-                    },
-                )?;
-                Ok(())
-            } else {
-                #[cfg(feature = "preview-builtin")]
-                preview::highlight(&_path, _offset);
-                Ok(())
-            }
-        }
-    }
-
-    fn current_component(&self) -> Option<crate::common::PreviewComponent> {
-        self.to_show.borrow().clone()
-    }
-}
-
 #[derive(Clone, clap::Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    #[arg(
-        short = 'I',
-        name = "Add include paths for the import statements",
-        number_of_values = 1,
-        action
-    )]
+    /// Add include paths for the import statements
+    #[arg(short = 'I', name = "/path/to/import", number_of_values = 1, action)]
     include_paths: Vec<std::path::PathBuf>,
+
+    /// Specify library location of the '@library' in the form 'library=/path/to/library'
+    #[arg(short = 'L', value_name = "library=path", number_of_values = 1, action)]
+    library_paths: Vec<String>,
 
     /// The style name for the preview ('native' or 'fluent')
     #[arg(long, name = "style name", default_value_t, action)]
@@ -155,6 +61,25 @@ pub struct Cli {
     /// Hide the preview toolbar
     #[arg(long, action)]
     no_toolbar: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Clone)]
+enum Commands {
+    /// Format slint files
+    Format(Format),
+}
+
+#[derive(Args, Clone)]
+struct Format {
+    #[arg(name = "path to .slint file(s)", action)]
+    paths: Vec<std::path::PathBuf>,
+
+    /// modify the file inline instead of printing to stdout
+    #[arg(short, long, action)]
+    inline: bool,
 }
 
 enum OutgoingRequest {
@@ -169,10 +94,30 @@ type OutgoingRequestQueue = Arc<Mutex<HashMap<RequestId, OutgoingRequest>>>;
 ///
 /// This type is duplicated, with the same interface, in wasm_main.rs
 #[derive(Clone)]
-pub struct ServerNotifier(crossbeam_channel::Sender<Message>, OutgoingRequestQueue);
+pub struct ServerNotifier {
+    sender: crossbeam_channel::Sender<Message>,
+    queue: OutgoingRequestQueue,
+    use_external_preview: Arc<atomic::AtomicBool>,
+    #[cfg(feature = "preview-engine")]
+    preview_to_lsp_sender: crossbeam_channel::Sender<crate::common::PreviewToLspMessage>,
+}
+
 impl ServerNotifier {
-    pub fn send_notification(&self, method: String, params: impl serde::Serialize) -> Result<()> {
-        self.0.send(Message::Notification(lsp_server::Notification::new(method, params)))?;
+    pub fn use_external_preview(&self) -> bool {
+        self.use_external_preview.load(atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_use_external_preview(&self, is_external: bool) {
+        self.use_external_preview.store(is_external, atomic::Ordering::Release);
+    }
+}
+
+impl ServerNotifier {
+    pub fn send_notification<N: Notification>(&self, params: N::Params) -> Result<()> {
+        self.sender.send(Message::Notification(lsp_server::Notification::new(
+            N::METHOD.to_string(),
+            params,
+        )))?;
         Ok(())
     }
 
@@ -184,8 +129,8 @@ impl ServerNotifier {
         let id = RequestId::from(REQ_ID.fetch_add(1, atomic::Ordering::Relaxed));
         let msg =
             Message::Request(lsp_server::Request::new(id.clone(), T::METHOD.to_string(), request));
-        self.0.send(msg)?;
-        let queue = self.1.clone();
+        self.sender.send(msg)?;
+        let queue = self.queue.clone();
         queue.lock().unwrap().insert(id.clone(), OutgoingRequest::Start);
         Ok(std::future::poll_fn(move |ctx| {
             let mut queue = queue.lock().unwrap();
@@ -207,6 +152,20 @@ impl ServerNotifier {
             }
         }))
     }
+
+    pub fn send_message_to_preview(&self, message: common::LspToPreviewMessage) {
+        if self.use_external_preview() {
+            let _ = self.send_notification::<common::LspToPreviewMessage>(message);
+        } else {
+            #[cfg(feature = "preview-builtin")]
+            preview::lsp_to_preview_message(message, self);
+        }
+    }
+
+    #[cfg(feature = "preview-engine")]
+    pub fn send_message_to_lsp(&self, message: common::PreviewToLspMessage) {
+        let _ = self.preview_to_lsp_sender.send(message);
+    }
 }
 
 impl RequestHandler {
@@ -215,16 +174,16 @@ impl RequestHandler {
             match x(request.params, ctx.clone()).await {
                 Ok(r) => ctx
                     .server_notifier
-                    .0
+                    .sender
                     .send(Message::Response(Response::new_ok(request.id, r)))?,
-                Err(e) => ctx.server_notifier.0.send(Message::Response(Response::new_err(
+                Err(e) => ctx.server_notifier.sender.send(Message::Response(Response::new_err(
                     request.id,
                     ErrorCode::InternalError as i32,
                     e.to_string(),
                 )))?,
             };
         } else {
-            ctx.server_notifier.0.send(Message::Response(Response::new_err(
+            ctx.server_notifier.sender.send(Message::Response(Response::new_err(
                 request.id,
                 ErrorCode::MethodNotFound as i32,
                 "Cannot handle request".into(),
@@ -239,9 +198,13 @@ fn main() {
     if !args.backend.is_empty() {
         std::env::set_var("SLINT_BACKEND", &args.backend);
     }
-    if args.fullscreen {
-        // TODO: Have an API to set the Window fullscreen #3283
-        std::env::set_var("SLINT_FULLSCREEN", "1");
+
+    if let Some(Commands::Format(args)) = args.command {
+        let _ = fmt::tool::run(args.paths, args.inline).map_err(|e| {
+            eprintln!("{e}");
+            std::process::exit(1);
+        });
+        std::process::exit(0);
     }
 
     #[cfg(feature = "preview-engine")]
@@ -275,6 +238,7 @@ fn main() {
         preview::start_ui_event_loop(cli_args);
         lsp_thread.join().unwrap();
     }
+
     #[cfg(not(feature = "preview-engine"))]
     match run_lsp_server(args) {
         Ok(threads) => threads.join().unwrap(),
@@ -303,43 +267,55 @@ fn main_loop(connection: Connection, init_param: InitializeParams, cli_args: Cli
     register_request_handlers(&mut rh);
 
     let request_queue = OutgoingRequestQueue::default();
-    let server_notifier = ServerNotifier(connection.sender.clone(), request_queue.clone());
+    #[cfg_attr(not(feature = "preview-engine"), allow(unused))]
+    let (preview_to_lsp_sender, preview_to_lsp_receiver) =
+        crossbeam_channel::unbounded::<crate::common::PreviewToLspMessage>();
 
-    let preview = Rc::new(Previewer {
-        server_notifier: server_notifier.clone(),
-        #[cfg(all(not(feature = "preview-builtin"), not(feature = "preview-external")))]
-        use_external_previewer: RefCell::new(false), // No preview, pick any.
-        #[cfg(all(not(feature = "preview-builtin"), feature = "preview-external"))]
-        use_external_previewer: RefCell::new(true), // external only
-        #[cfg(all(feature = "preview-builtin", not(feature = "preview-external")))]
-        use_external_previewer: RefCell::new(false), // internal only
-        #[cfg(all(feature = "preview-builtin", feature = "preview-external"))]
-        use_external_previewer: RefCell::new(false), // prefer internal
-        to_show: RefCell::new(None),
-    });
+    let server_notifier = ServerNotifier {
+        sender: connection.sender.clone(),
+        queue: request_queue.clone(),
+        use_external_preview: Default::default(),
+        #[cfg(feature = "preview-engine")]
+        preview_to_lsp_sender,
+    };
+
     let mut compiler_config =
         CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Interpreter);
 
     compiler_config.style =
         Some(if cli_args.style.is_empty() { "native".into() } else { cli_args.style });
     compiler_config.include_paths = cli_args.include_paths;
-    let preview_notifier = preview.clone();
+    compiler_config.library_paths = cli_args
+        .library_paths
+        .iter()
+        .filter_map(|entry| entry.split('=').collect_tuple().map(|(k, v)| (k.into(), v.into())))
+        .collect();
+    let server_notifier_ = server_notifier.clone();
     compiler_config.open_import_fallback = Some(Rc::new(move |path| {
-        let preview_notifier = preview_notifier.clone();
+        let server_notifier = server_notifier_.clone();
         Box::pin(async move {
             let contents = std::fs::read_to_string(&path);
             if let Ok(contents) = &contents {
-                preview_notifier.set_contents(&PathBuf::from(path), contents);
+                if let Ok(url) = Url::from_file_path(&path) {
+                    server_notifier.send_message_to_preview(
+                        common::LspToPreviewMessage::SetContents {
+                            url: common::VersionedUrl::new(url, None),
+                            contents: contents.clone(),
+                        },
+                    )
+                }
             }
             Some(contents)
         })
     }));
 
     let ctx = Rc::new(Context {
-        document_cache: RefCell::new(DocumentCache::new(compiler_config)),
+        document_cache: RefCell::new(crate::common::DocumentCache::new(compiler_config)),
+        preview_config: RefCell::new(Default::default()),
         server_notifier,
         init_param,
-        preview,
+        #[cfg(any(feature = "preview-external", feature = "preview-engine"))]
+        to_show: Default::default(),
     });
 
     let mut futures = Vec::<Pin<Box<dyn Future<Output = Result<()>>>>>::new();
@@ -360,33 +336,42 @@ fn main_loop(connection: Connection, init_param: InitializeParams, cli_args: Cli
         Poll::Pending => futures.push(first_future),
     };
 
-    for msg in &connection.receiver {
-        match msg {
-            Message::Request(req) => {
-                // ignore errors when shutdown
-                if connection.handle_shutdown(&req).unwrap_or(false) {
-                    return Ok(());
-                }
-                futures.push(Box::pin(rh.handle_request(req, &ctx)));
-            }
-            Message::Response(resp) => {
-                if let Some(q) = request_queue.lock().unwrap().get_mut(&resp.id) {
-                    match q {
-                        OutgoingRequest::Done(_) => {
-                            return Err("Response to unknown request".into())
+    loop {
+        crossbeam_channel::select! {
+            recv(connection.receiver) -> msg => {
+                match msg? {
+                    Message::Request(req) => {
+                        // ignore errors when shutdown
+                        if connection.handle_shutdown(&req).unwrap_or(false) {
+                            return Ok(());
                         }
-                        OutgoingRequest::Start => { /* nothing to do */ }
-                        OutgoingRequest::Pending(x) => x.wake_by_ref(),
-                    };
-                    *q = OutgoingRequest::Done(resp)
-                } else {
-                    return Err("Response to unknown request".into());
+                        futures.push(Box::pin(rh.handle_request(req, &ctx)));
+                    }
+                    Message::Response(resp) => {
+                        if let Some(q) = request_queue.lock().unwrap().get_mut(&resp.id) {
+                            match q {
+                                OutgoingRequest::Done(_) => {
+                                    return Err("Response to unknown request".into())
+                                }
+                                OutgoingRequest::Start => { /* nothing to do */ }
+                                OutgoingRequest::Pending(x) => x.wake_by_ref(),
+                            };
+                            *q = OutgoingRequest::Done(resp)
+                        } else {
+                            return Err("Response to unknown request".into());
+                        }
+                    }
+                    Message::Notification(notification) => {
+                        futures.push(Box::pin(handle_notification(notification, &ctx)))
+                    }
                 }
-            }
-            Message::Notification(notification) => {
-                futures.push(Box::pin(handle_notification(notification, &ctx)))
-            }
-        }
+             },
+             recv(preview_to_lsp_receiver) -> _msg => {
+                // Messages from the native preview come in here:
+                #[cfg(feature = "preview-engine")]
+                futures.push(Box::pin(handle_preview_to_lsp_message(_msg?, &ctx)))
+             },
+        };
 
         let mut result = Ok(());
         futures.retain_mut(|f| {
@@ -403,7 +388,6 @@ fn main_loop(connection: Connection, init_param: InitializeParams, cli_args: Cli
         });
         result?;
     }
-    Ok(())
 }
 
 async fn handle_notification(req: lsp_server::Notification, ctx: &Rc<Context>) -> Result<()> {
@@ -414,10 +398,10 @@ async fn handle_notification(req: lsp_server::Notification, ctx: &Rc<Context>) -
                 ctx,
                 params.text_document.text,
                 params.text_document.uri,
-                params.text_document.version,
+                Some(params.text_document.version),
                 &mut ctx.document_cache.borrow_mut(),
             )
-            .await?;
+            .await
         }
         DidChangeTextDocument::METHOD => {
             let mut params: DidChangeTextDocumentParams = serde_json::from_value(req.params)?;
@@ -425,83 +409,87 @@ async fn handle_notification(req: lsp_server::Notification, ctx: &Rc<Context>) -
                 ctx,
                 params.content_changes.pop().unwrap().text,
                 params.text_document.uri,
-                params.text_document.version,
+                Some(params.text_document.version),
                 &mut ctx.document_cache.borrow_mut(),
             )
-            .await?;
+            .await
         }
-        DidChangeConfiguration::METHOD => {
-            load_configuration(ctx).await?;
-        }
+        DidChangeConfiguration::METHOD => load_configuration(ctx).await,
 
         #[cfg(any(feature = "preview-builtin", feature = "preview-external"))]
         "slint/showPreview" => {
-            language::show_preview_command(
-                req.params.as_array().map_or(&[], |x| x.as_slice()),
-                ctx,
-            )?;
+            language::show_preview_command(req.params.as_array().map_or(&[], |x| x.as_slice()), ctx)
         }
 
-        #[cfg(all(feature = "preview-external", feature = "preview-engine"))]
+        // Messages from the WASM preview come in as notifications sent by the "editor":
+        #[cfg(any(feature = "preview-external", feature = "preview-engine"))]
         "slint/preview_to_lsp" => {
-            use common::PreviewToLspMessage as M;
-            let params: M = serde_json::from_value(req.params)?;
-            match params {
-                M::Status { message, health } => {
-                    crate::preview::send_status_notification(
-                        &ctx.server_notifier,
-                        &message,
-                        health,
-                    );
-                }
-                M::Diagnostics { uri, diagnostics } => {
-                    crate::preview::notify_lsp_diagnostics(&ctx.server_notifier, uri, diagnostics);
-                }
-                M::ShowDocument { file, start_line, start_column, end_line, end_column } => {
-                    send_show_document_to_editor(
-                        ctx.server_notifier.clone(),
-                        file,
-                        start_line,
-                        start_column,
-                        end_line,
-                        end_column,
-                    )
-                    .await;
-                }
-                M::PreviewTypeChanged { is_external } => {
-                    ctx.preview.set_use_external_previewer(is_external);
-                }
-                M::RequestState { .. } => {
-                    crate::language::request_state(ctx);
-                }
-            }
+            handle_preview_to_lsp_message(serde_json::from_value(req.params)?, ctx).await
         }
-        _ => (),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(any(feature = "preview-external", feature = "preview-engine"))]
+async fn send_workspace_edit(
+    server_notifier: ServerNotifier,
+    label: Option<String>,
+    edit: Result<lsp_types::WorkspaceEdit>,
+) -> Result<()> {
+    let edit = edit?;
+
+    let response = server_notifier
+        .send_request::<lsp_types::request::ApplyWorkspaceEdit>(
+            lsp_types::ApplyWorkspaceEditParams { label, edit },
+        )?
+        .await?;
+    if !response.applied {
+        return Err(response
+            .failure_reason
+            .unwrap_or("Operation failed, no specific reason given".into())
+            .into());
     }
     Ok(())
 }
 
-#[cfg(feature = "preview-engine")]
-pub async fn send_show_document_to_editor(
-    sender: ServerNotifier,
-    file: String,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
-) {
-    let Some(params) = crate::preview::show_document_request_from_element_callback(
-        &file,
-        start_line,
-        start_column,
-        end_line,
-        end_column,
-    ) else {
-        return;
-    };
-    let Ok(fut) = sender.send_request::<lsp_types::request::ShowDocument>(params) else {
-        return;
-    };
-
-    let _ = fut.await;
+#[cfg(any(feature = "preview-external", feature = "preview-engine"))]
+async fn handle_preview_to_lsp_message(
+    message: crate::common::PreviewToLspMessage,
+    ctx: &Rc<Context>,
+) -> Result<()> {
+    use crate::common::PreviewToLspMessage as M;
+    match message {
+        M::Status { message, health } => {
+            crate::common::lsp_to_editor::send_status_notification(
+                &ctx.server_notifier,
+                &message,
+                health,
+            );
+        }
+        M::Diagnostics { uri, diagnostics } => {
+            crate::common::lsp_to_editor::notify_lsp_diagnostics(
+                &ctx.server_notifier,
+                uri,
+                diagnostics,
+            );
+        }
+        M::ShowDocument { file, selection } => {
+            crate::common::lsp_to_editor::send_show_document_to_editor(
+                ctx.server_notifier.clone(),
+                file,
+                selection,
+            )
+            .await;
+        }
+        M::PreviewTypeChanged { is_external } => {
+            ctx.server_notifier.set_use_external_preview(is_external);
+        }
+        M::RequestState { .. } => {
+            crate::language::request_state(ctx);
+        }
+        M::SendWorkspaceEdit { label, edit } => {
+            let _ = send_workspace_edit(ctx.server_notifier.clone(), label, Ok(edit)).await;
+        }
+    }
+    Ok(())
 }

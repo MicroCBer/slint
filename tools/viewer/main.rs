@@ -1,42 +1,50 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![doc = include_str!("README.md")]
 
+use clap::Parser;
+use i_slint_compiler::ComponentSelection;
 use i_slint_core::model::{Model, ModelRc};
 use i_slint_core::SharedVector;
+use itertools::Itertools;
 use slint_interpreter::{
     ComponentDefinition, ComponentHandle, ComponentInstance, SharedString, Value,
 };
 use std::collections::HashMap;
+use std::io::{BufReader, BufWriter};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-
-use clap::Parser;
-use itertools::Itertools;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Clone, clap::Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[arg(short = 'I', name = "include path for other .slint files", number_of_values = 1, action)]
+    /// Include path for other .slint files or images
+    #[arg(short = 'I', value_name = "include path", number_of_values = 1, action)]
     include_paths: Vec<std::path::PathBuf>,
 
-    /// The first argument is the library name, and the second argument is the path to the library.
-    #[arg(short = 'L', name = "library path for @library imports", number_of_values = 1, action)]
+    /// Specify Library location of the '@library' in the form 'library=/path/to/library'
+    #[arg(short = 'L', value_name = "library=path", number_of_values = 1, action)]
     library_paths: Vec<String>,
 
     /// The .slint file to load ('-' for stdin)
-    #[arg(name = "path to .slint file", action)]
+    #[arg(name = "path", action)]
     path: std::path::PathBuf,
 
     /// The style name ('native' or 'fluent')
-    #[arg(long, name = "style name", action)]
+    #[arg(long, value_name = "style name", action)]
     style: Option<String>,
 
+    /// The name of the component to view. If unset, the last exported component of the file is used.
+    /// If the component name is not in the .slint file , nothing will be shown
+    #[arg(long, value_name = "component name", action)]
+    component: Option<String>,
+
     /// The rendering backend
-    #[arg(long, name = "backend", action)]
+    #[arg(long, value_name = "backend", action)]
     backend: Option<String>,
 
     /// Automatically watch the file system, and reload when it changes
@@ -44,11 +52,11 @@ struct Cli {
     auto_reload: bool,
 
     /// Load properties from a json file ('-' for stdin)
-    #[arg(long, name = "load data file", action)]
+    #[arg(long, value_name = "json file", action)]
     load_data: Option<std::path::PathBuf>,
 
     /// Store properties values in a json file at exit ('-' for stdout)
-    #[arg(long, name = "save data file", action)]
+    #[arg(long, value_name = "json file", action)]
     save_data: Option<std::path::PathBuf>,
 
     /// Specify callbacks handler.
@@ -94,14 +102,22 @@ fn main() -> Result<()> {
     };
 
     let fswatcher = if args.auto_reload { Some(start_fswatch_thread(args.clone())?) } else { None };
-    let mut compiler = init_compiler(&args, fswatcher);
-
-    let c = spin_on::spin_on(compiler.build_from_path(args.path));
-    slint_interpreter::print_diagnostics(compiler.diagnostics());
-
-    let c = match c {
-        Some(c) => c,
-        None => std::process::exit(-1),
+    let compiler = init_compiler(&args, fswatcher);
+    let r = spin_on::spin_on(compiler.build_from_path(&args.path));
+    r.print_diagnostics();
+    if r.has_errors() {
+        std::process::exit(-1);
+    }
+    let Some(c) = r.components().next() else {
+        match args.component {
+            Some(name) => {
+                eprintln!("Component '{name}' not found in file '{}'", args.path.display());
+            }
+            None => {
+                eprintln!("No component found in file '{}'", args.path.display());
+            }
+        }
+        std::process::exit(-1);
     };
 
     let component = c.create().unwrap();
@@ -153,7 +169,7 @@ fn main() -> Result<()> {
         if data_path == std::path::Path::new("-") {
             serde_json::to_writer_pretty(std::io::stdout(), &obj)?;
         } else {
-            serde_json::to_writer_pretty(std::fs::File::create(data_path)?, &obj)?;
+            serde_json::to_writer_pretty(BufWriter::new(std::fs::File::create(data_path)?), &obj)?;
         }
     }
 
@@ -163,8 +179,8 @@ fn main() -> Result<()> {
 fn init_compiler(
     args: &Cli,
     fswatcher: Option<Arc<Mutex<notify::RecommendedWatcher>>>,
-) -> slint_interpreter::ComponentCompiler {
-    let mut compiler = slint_interpreter::ComponentCompiler::default();
+) -> slint_interpreter::Compiler {
+    let mut compiler = slint_interpreter::Compiler::new();
     #[cfg(feature = "gettext")]
     if let Some(domain) = args.translation_domain.clone() {
         compiler.set_translation_domain(domain);
@@ -180,37 +196,56 @@ fn init_compiler(
         compiler.set_style(style.clone());
     }
     if let Some(watcher) = fswatcher {
-        notify::Watcher::watch(
-            &mut *watcher.lock().unwrap(),
-            &args.path,
-            notify::RecursiveMode::NonRecursive,
-        )
-        .unwrap_or_else(|err| {
-            eprintln!("Warning: error while watching {}: {:?}", args.path.display(), err)
-        });
+        watch_with_retry(&args.path, &watcher);
         if let Some(data_path) = &args.load_data {
-            notify::Watcher::watch(
-                &mut *watcher.lock().unwrap(),
-                data_path,
-                notify::RecursiveMode::NonRecursive,
-            )
-            .unwrap_or_else(|err| {
-                eprintln!("Warning: error while watching {}: {:?}", data_path.display(), err)
-            });
+            watch_with_retry(data_path, &watcher);
         }
         compiler.set_file_loader(move |path| {
-            notify::Watcher::watch(
-                &mut *watcher.lock().unwrap(),
-                path,
-                notify::RecursiveMode::NonRecursive,
-            )
-            .unwrap_or_else(|err| {
-                eprintln!("Warning: error while watching {}: {:?}", path.display(), err)
-            });
+            watch_with_retry(&path.into(), &watcher);
             Box::pin(async { None })
         })
     }
+
+    compiler.compiler_configuration(i_slint_core::InternalToken).components_to_generate =
+        match &args.component {
+            Some(component) => ComponentSelection::Named(component.clone()),
+            None => ComponentSelection::LastExported,
+        };
+
     compiler
+}
+
+fn watch_with_retry(path: &PathBuf, watcher: &Arc<Mutex<notify::RecommendedWatcher>>) {
+    notify::Watcher::watch(
+        &mut *watcher.lock().unwrap(),
+        path,
+        notify::RecursiveMode::NonRecursive,
+    )
+    .unwrap_or_else(|err| match err.kind {
+        notify::ErrorKind::PathNotFound | notify::ErrorKind::Generic(_) => {
+            let path = path.clone();
+            let watcher = watcher.clone();
+            static RETRY_DURATION: u64 = 100;
+            i_slint_core::timers::Timer::single_shot(
+                std::time::Duration::from_millis(RETRY_DURATION),
+                move || {
+                    notify::Watcher::watch(
+                        &mut *watcher.lock().unwrap(),
+                        &path,
+                        notify::RecursiveMode::NonRecursive,
+                    )
+                    .unwrap_or_else(|err| {
+                        eprintln!(
+                            "Warning: error while watching missing path {}: {:?}",
+                            path.display(),
+                            err
+                        )
+                    });
+                },
+            );
+        }
+        _ => eprintln!("Warning: error while watching {}: {:?}", path.display(), err),
+    });
 }
 
 fn init_dialog(instance: &ComponentInstance) {
@@ -260,11 +295,10 @@ fn start_fswatch_thread(args: Cli) -> Result<Arc<Mutex<notify::RecommendedWatche
 }
 
 async fn reload(args: Cli, fswatcher: Arc<Mutex<notify::RecommendedWatcher>>) {
-    let mut compiler = init_compiler(&args, Some(fswatcher));
-    let c = compiler.build_from_path(&args.path).await;
-    slint_interpreter::print_diagnostics(compiler.diagnostics());
-
-    if let Some(c) = c {
+    let compiler = init_compiler(&args, Some(fswatcher));
+    let r = compiler.build_from_path(&args.path).await;
+    r.print_diagnostics();
+    if let Some(c) = r.components().next() {
         CURRENT_INSTANCE.with(|current| {
             let mut current = current.borrow_mut();
             if let Some(handle) = current.take() {
@@ -283,6 +317,11 @@ async fn reload(args: Cli, fswatcher: Arc<Mutex<notify::RecommendedWatcher>>) {
             }
             eprintln!("Successful reload of {}", args.path.display());
         });
+    } else if !r.has_errors() {
+        match &args.component {
+            Some(name) => println!("Component {name} not found"),
+            None => println!("No component found"),
+        }
     }
 
     PENDING_EVENTS.fetch_sub(1, Ordering::SeqCst);
@@ -296,7 +335,7 @@ fn load_data(
     let json: serde_json::Value = if data_path == std::path::Path::new("-") {
         serde_json::from_reader(std::io::stdin())?
     } else {
-        serde_json::from_reader(std::fs::File::open(data_path)?)?
+        serde_json::from_reader(BufReader::new(std::fs::File::open(data_path)?))?
     };
 
     let types = c.properties_and_callbacks().collect::<HashMap<_, _>>();

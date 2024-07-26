@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { ListView } from "internal-scrollview.slint";
 
@@ -11,6 +11,7 @@ export component StandardTableView {
     callback sort-descending(int);
     callback row-pointer-event(int /* row-index */, PointerEvent /* event */, Point /* absolute mouse position */);
     callback current-row-changed(int /* current-row */);
+    accessible-role: table;
 
     out property <int> current-sort-column: -1;
     in-out property <[TableColumn]> columns;
@@ -84,6 +85,7 @@ export component StandardTableView {
                             item: cell;
                             index: i;
                             has-hover: row-ta.has-hover;
+                            min-width: 0;
                         }
                     }
                 }

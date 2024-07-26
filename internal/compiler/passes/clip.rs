@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Pass that lowers synthetic `clip` properties to Clip element
 
@@ -29,7 +29,11 @@ pub fn handle_clip(
                 return;
             }
             if elem.bindings.contains_key("clip")
-                || elem.property_analysis.borrow().get("clip").map_or(false, |a| a.is_set)
+                || elem
+                    .property_analysis
+                    .borrow()
+                    .get("clip")
+                    .map_or(false, |a| a.is_set || a.is_linked)
             {
                 match elem.builtin_type().as_ref().map(|ty| ty.name.as_str()) {
                     Some("Rectangle") => {}
@@ -40,7 +44,7 @@ pub fn handle_clip(
                     _ => {
                         diag.push_error(
                             "The 'clip' property can only be applied to a Rectangle or a Path for now".into(),
-                            &elem.bindings.get("clip").and_then(|x| x.borrow().span.clone()).or_else(|| elem.node.as_ref().map(|e| e.to_source_location())),
+                            &elem.bindings.get("clip").and_then(|x| x.borrow().span.clone()).unwrap_or_else(|| elem.to_source_location()),
                         );
                         return;
                     }
@@ -75,14 +79,23 @@ fn create_clip_element(parent_elem: &ElementRc, native_clip: &Rc<NativeClass>) {
             )
         })
         .collect();
-    for optional_binding in ["border-radius", "border-width"].iter() {
-        if parent_elem.borrow().bindings.contains_key(*optional_binding) {
+
+    copy_optional_binding(parent_elem, "border-width", &clip);
+    if super::border_radius::BORDER_RADIUS_PROPERTIES
+        .iter()
+        .any(|property_name| parent_elem.borrow().is_binding_set(property_name, true))
+    {
+        for optional_binding in super::border_radius::BORDER_RADIUS_PROPERTIES.iter() {
+            copy_optional_binding(parent_elem, optional_binding, &clip);
+        }
+    } else if parent_elem.borrow().bindings.contains_key("border-radius") {
+        for prop in super::border_radius::BORDER_RADIUS_PROPERTIES.iter() {
             clip.borrow_mut().bindings.insert(
-                optional_binding.to_string(),
+                prop.to_string(),
                 RefCell::new(
                     Expression::PropertyReference(NamedReference::new(
                         parent_elem,
-                        optional_binding,
+                        "border-radius",
                     ))
                     .into(),
                 ),
@@ -93,4 +106,16 @@ fn create_clip_element(parent_elem: &ElementRc, native_clip: &Rc<NativeClass>) {
         "clip".to_owned(),
         BindingExpression::new_two_way(NamedReference::new(parent_elem, "clip")).into(),
     );
+}
+
+fn copy_optional_binding(parent_elem: &ElementRc, optional_binding: &str, clip: &ElementRc) {
+    if parent_elem.borrow().bindings.contains_key(optional_binding) {
+        clip.borrow_mut().bindings.insert(
+            optional_binding.to_string(),
+            RefCell::new(
+                Expression::PropertyReference(NamedReference::new(parent_elem, optional_binding))
+                    .into(),
+            ),
+        );
+    }
 }

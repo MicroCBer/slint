@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore sharedvector textlayout
 
@@ -15,12 +15,16 @@ pub(crate) mod unsafe_single_threaded;
 compile_error!(
     "At least one of the following feature need to be enabled: `std` or `unsafe-single-threaded`"
 );
+#[cfg(all(not(feature = "std"), feature = "unsafe-single-threaded"))]
+use crate::unsafe_single_threaded::thread_local;
 
 pub mod accessibility;
 pub mod animations;
 pub mod api;
 pub mod callbacks;
 pub mod component_factory;
+pub mod context;
+pub mod date_time;
 pub mod future;
 pub mod graphics;
 pub mod input;
@@ -34,6 +38,8 @@ pub mod model;
 pub mod platform;
 pub mod properties;
 pub mod renderer;
+#[cfg(feature = "rtti")]
+pub mod rtti;
 pub mod sharedvector;
 pub mod slice;
 #[cfg(feature = "software-renderer")]
@@ -44,9 +50,6 @@ pub mod textlayout;
 pub mod timers;
 pub mod translations;
 pub mod window;
-
-#[cfg(feature = "rtti")]
-pub mod rtti;
 
 #[doc(inline)]
 pub use string::SharedString;
@@ -76,8 +79,10 @@ pub use graphics::RgbaColor;
 #[doc(inline)]
 pub use graphics::PathData;
 
-use api::PlatformError;
-use platform::Platform;
+#[doc(inline)]
+pub use graphics::BorderRadius;
+
+pub use context::{with_platform, SlintContext};
 
 #[cfg(not(slint_int_coord))]
 pub type Coord = f32;
@@ -87,19 +92,3 @@ pub type Coord = i32;
 /// This type is not exported from the public API crate, so function having this
 /// parameter cannot be called from the public API without naming it
 pub struct InternalToken;
-
-/// Internal function to access the platform abstraction.
-/// The factory function is called if the platform abstraction is not yet
-/// initialized, and should be given by the platform_selector
-pub fn with_platform<R>(
-    factory: impl FnOnce() -> Result<alloc::boxed::Box<dyn Platform + 'static>, PlatformError>,
-    f: impl FnOnce(&dyn Platform) -> Result<R, PlatformError>,
-) -> Result<R, PlatformError> {
-    platform::PLATFORM_INSTANCE.with(|p| match p.get() {
-        Some(p) => f(&**p),
-        None => {
-            platform::set_platform(factory()?).map_err(PlatformError::SetPlatformError)?;
-            f(&**p.get().unwrap())
-        }
-    })
-}

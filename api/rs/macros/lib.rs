@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell:ignore punct
 
@@ -7,8 +7,6 @@
 #![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
 
 extern crate proc_macro;
-
-use std::collections::HashMap;
 
 use i_slint_compiler::diagnostics::BuildDiagnostics;
 use i_slint_compiler::parser::SyntaxKind;
@@ -86,7 +84,7 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                     if (last.kind == SyntaxKind::ColorLiteral && last.text.len() == 1)
                         || (last.kind == SyntaxKind::Identifier
                             && are_token_touching(prev_span, span)
-                                .unwrap_or_else(|| last.text.ends_with("-")))
+                                .unwrap_or_else(|| last.text.ends_with('-')))
                     {
                         last.text = format!("{}{}", last.text, i).into();
                         prev_span = span;
@@ -226,7 +224,7 @@ fn fill_token_vec(stream: impl Iterator<Item = TokenTree>, vec: &mut Vec<parser:
                         if (last.kind == SyntaxKind::ColorLiteral && last.text.len() == 1)
                             || (last.kind == SyntaxKind::Identifier
                                 && are_token_touching(prev_span, span)
-                                    .unwrap_or_else(|| last.text.ends_with("-")))
+                                    .unwrap_or_else(|| last.text.ends_with('-')))
                         {
                             last.text = format!("{}{}", last.text, s).into();
                             prev_span = span;
@@ -284,13 +282,10 @@ fn extract_path(literal: proc_macro::Literal) -> std::path::PathBuf {
     path_with_quotes_stripped.into()
 }
 
-fn extract_include_and_library_paths(
+fn extract_compiler_config(
     mut stream: proc_macro::token_stream::IntoIter,
-) -> (impl Iterator<Item = TokenTree>, Vec<std::path::PathBuf>, HashMap<String, std::path::PathBuf>)
-{
-    let mut include_paths = Vec::new();
-    let mut library_paths = HashMap::new();
-
+    compiler_config: &mut CompilerConfiguration,
+) -> impl Iterator<Item = TokenTree> {
     let mut remaining_stream;
     loop {
         remaining_stream = stream.clone();
@@ -308,7 +303,7 @@ fn extract_include_and_library_paths(
                                 Some(TokenTree::Punct(equal_punct)),
                                 Some(TokenTree::Literal(path)),
                             ) if equal_punct.as_char() == '=' => {
-                                include_paths.push(extract_path(path));
+                                compiler_config.include_paths.push(extract_path(path));
                             }
                             _ => break,
                         }
@@ -325,7 +320,27 @@ fn extract_include_and_library_paths(
                                 && equal_punct.as_char() == '=' =>
                             {
                                 let library_name = group.stream().into_iter().next().unwrap();
-                                library_paths.insert(library_name.to_string(), extract_path(path));
+                                compiler_config
+                                    .library_paths
+                                    .insert(library_name.to_string(), extract_path(path));
+                            }
+                            _ => break,
+                        }
+                    }
+                    Some(TokenTree::Ident(style_ident)) if style_ident.to_string() == "style" => {
+                        match (attr_stream.next(), attr_stream.next()) {
+                            (
+                                Some(TokenTree::Punct(equal_punct)),
+                                Some(TokenTree::Literal(requested_style)),
+                            ) if equal_punct.as_char() == '=' => {
+                                compiler_config.style = requested_style
+                                    .to_string()
+                                    .strip_prefix('\"')
+                                    .unwrap()
+                                    .strip_suffix('\"')
+                                    .unwrap()
+                                    .to_string()
+                                    .into();
                             }
                             _ => break,
                         }
@@ -336,7 +351,7 @@ fn extract_include_and_library_paths(
             _ => break,
         }
     }
-    (remaining_stream, include_paths, library_paths)
+    remaining_stream
 }
 
 /// This macro allows you to use the Slint design markup language inline in Rust code. Within the braces of the macro
@@ -356,7 +371,10 @@ fn extract_include_and_library_paths(
 pub fn slint(stream: TokenStream) -> TokenStream {
     let token_iter = stream.into_iter();
 
-    let (token_iter, include_paths, library_paths) = extract_include_and_library_paths(token_iter);
+    let mut compiler_config =
+        CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Rust);
+
+    let token_iter = extract_compiler_config(token_iter, &mut compiler_config);
 
     let mut tokens = vec![];
     fill_token_vec(token_iter, &mut tokens);
@@ -370,24 +388,20 @@ pub fn slint(stream: TokenStream) -> TokenStream {
     };
     let mut diag = BuildDiagnostics::default();
     let syntax_node = parser::parse_tokens(tokens.clone(), source_file, &mut diag);
-    if diag.has_error() {
+    if diag.has_errors() {
         return diag.report_macro_diagnostic(&tokens);
     }
 
     //println!("{:#?}", syntax_node);
-    let mut compiler_config =
-        CompilerConfiguration::new(i_slint_compiler::generator::OutputFormat::Rust);
     compiler_config.translation_domain = std::env::var("CARGO_PKG_NAME").ok();
-    compiler_config.include_paths = include_paths;
-    compiler_config.library_paths = library_paths;
-    let (root_component, diag) =
+    let (root_component, diag, loader) =
         spin_on::spin_on(compile_syntax_node(syntax_node, diag, compiler_config));
     //println!("{:#?}", tree);
-    if diag.has_error() {
+    if diag.has_errors() {
         return diag.report_macro_diagnostic(&tokens);
     }
 
-    let mut result = generator::rust::generate(&root_component);
+    let mut result = generator::rust::generate(&root_component, &loader.compiler_config);
 
     // Make sure to recompile if any of the external files changes
     let reload = diag
@@ -398,7 +412,7 @@ pub fn slint(stream: TokenStream) -> TokenStream {
         .map(|p| quote! {const _ : &'static [u8] = ::core::include_bytes!(#p);});
 
     result.extend(reload);
-    result.extend(quote! {const _ : Option<&'static str> = ::core::option_env!("SLINT_STYLE");});
+    result.extend(quote! {const _ : ::core::option::Option<&'static str> = ::core::option_env!("SLINT_STYLE");});
 
     let mut result = TokenStream::from(result);
     if !diag.is_empty() {

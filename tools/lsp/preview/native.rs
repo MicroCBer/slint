@@ -1,19 +1,14 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore condvar
 
+use super::PreviewState;
 use crate::lsp_ext::Health;
 use crate::ServerNotifier;
-
-use slint::VecModel;
-use slint_interpreter::ComponentHandle;
-
 use once_cell::sync::Lazy;
-use std::cell::RefCell;
+use slint_interpreter::ComponentHandle;
 use std::future::Future;
-use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::{Condvar, Mutex};
 
 #[derive(PartialEq)]
@@ -85,11 +80,7 @@ pub fn start_ui_event_loop(cli_args: crate::Cli) {
         }
     }
 
-    i_slint_backend_selector::with_platform(|b| {
-        b.set_event_loop_quit_on_last_window_closed(false);
-        b.run_event_loop()
-    })
-    .unwrap();
+    slint::run_event_loop_until_quit().unwrap();
 }
 
 pub fn quit_ui_event_loop() {
@@ -138,7 +129,7 @@ pub fn open_ui(sender: &ServerNotifier) {
     };
 
     i_slint_core::api::invoke_from_event_loop(move || {
-        PREVIEW_STATE.with(|preview_state| {
+        super::PREVIEW_STATE.with(|preview_state| {
             let mut preview_state = preview_state.borrow_mut();
 
             open_ui_impl(&mut preview_state);
@@ -147,8 +138,8 @@ pub fn open_ui(sender: &ServerNotifier) {
     .unwrap();
 }
 
-fn open_ui_impl(preview_state: &mut PreviewState) {
-    let (default_style, show_preview_ui) = {
+pub(super) fn open_ui_impl(preview_state: &mut PreviewState) {
+    let (default_style, show_preview_ui, fullscreen) = {
         let cache = super::CONTENT_CACHE.get_or_init(Default::default).lock().unwrap();
         let style = cache.config.style.clone();
         let style = if style.is_empty() {
@@ -159,23 +150,23 @@ fn open_ui_impl(preview_state: &mut PreviewState) {
         let hide_ui = cache
             .config
             .hide_ui
-            .or_else(|| CLI_ARGS.with(|args| args.get().map(|a| a.no_toolbar.clone())))
+            .or_else(|| CLI_ARGS.with(|args| args.get().map(|a| a.no_toolbar)))
             .unwrap_or(false);
-        (style, !hide_ui)
+        let fullscreen = CLI_ARGS.with(|args| args.get().map(|a| a.fullscreen).unwrap_or_default());
+        (style, !hide_ui, fullscreen)
     };
 
     // TODO: Handle Error!
-    let ui = preview_state.ui.get_or_insert_with(|| super::ui::create_ui(default_style).unwrap());
-    ui.set_show_preview_ui(show_preview_ui);
-    ui.on_show_document(|url, line, column| {
-        ask_editor_to_show_document(
-            url.as_str().to_string(),
-            line as u32,
-            column as u32,
-            line as u32,
-            column as u32,
-        )
-    });
+    let experimental = std::env::var_os("SLINT_ENABLE_EXPERIMENTAL_FEATURES")
+        .map(|s| !s.is_empty() && s != "0")
+        .unwrap_or(false);
+
+    let ui = preview_state
+        .ui
+        .get_or_insert_with(|| super::ui::create_ui(default_style, experimental).unwrap());
+    let api = ui.global::<crate::preview::ui::Api>();
+    api.set_show_preview_ui(show_preview_ui);
+    ui.window().set_fullscreen(fullscreen);
     ui.window().on_close_requested(|| {
         let mut cache = super::CONTENT_CACHE.get_or_init(Default::default).lock().unwrap();
         cache.ui_is_visible = false;
@@ -185,7 +176,6 @@ fn open_ui_impl(preview_state: &mut PreviewState) {
 
         slint::CloseRequestResponse::HideWindow
     });
-    ui.show().unwrap();
 }
 
 pub fn close_ui() {
@@ -198,7 +188,7 @@ pub fn close_ui() {
     }
 
     i_slint_core::api::invoke_from_event_loop(move || {
-        PREVIEW_STATE.with(move |preview_state| {
+        super::PREVIEW_STATE.with(move |preview_state| {
             let mut preview_state = preview_state.borrow_mut();
             close_ui_impl(&mut preview_state)
         });
@@ -216,15 +206,8 @@ fn close_ui_impl(preview_state: &mut PreviewState) {
 static SERVER_NOTIFIER: std::sync::OnceLock<Mutex<Option<ServerNotifier>>> =
     std::sync::OnceLock::new();
 
-#[derive(Default)]
-struct PreviewState {
-    ui: Option<super::ui::PreviewUi>,
-    handle: Rc<RefCell<Option<slint_interpreter::ComponentInstance>>>,
-}
-thread_local! {static PREVIEW_STATE: std::cell::RefCell<PreviewState> = Default::default();}
-
 pub fn notify_diagnostics(diagnostics: &[slint_interpreter::Diagnostic]) -> Option<()> {
-    set_diagnostics(diagnostics);
+    super::set_diagnostics(diagnostics);
 
     let Some(sender) = SERVER_NOTIFIER.get_or_init(Default::default).lock().unwrap().clone() else {
         return Some(());
@@ -233,69 +216,9 @@ pub fn notify_diagnostics(diagnostics: &[slint_interpreter::Diagnostic]) -> Opti
     let lsp_diags = crate::preview::convert_diagnostics(diagnostics);
 
     for (url, diagnostics) in lsp_diags {
-        crate::preview::notify_lsp_diagnostics(&sender, url, diagnostics)?;
+        crate::common::lsp_to_editor::notify_lsp_diagnostics(&sender, url, diagnostics)?;
     }
     Some(())
-}
-
-pub fn set_show_preview_ui(show_preview_ui: bool) {
-    run_in_ui_thread(move || async move {
-        PREVIEW_STATE.with(|preview_state| {
-            let preview_state = preview_state.borrow();
-            if let Some(ui) = &preview_state.ui {
-                ui.set_show_preview_ui(show_preview_ui)
-            }
-        })
-    });
-}
-
-pub fn set_current_style(style: String) {
-    PREVIEW_STATE.with(move |preview_state| {
-        let preview_state = preview_state.borrow_mut();
-        if let Some(ui) = &preview_state.ui {
-            ui.set_current_style(style.into())
-        }
-    });
-}
-
-pub fn get_current_style() -> String {
-    PREVIEW_STATE.with(|preview_state| -> String {
-        let preview_state = preview_state.borrow();
-        if let Some(ui) = &preview_state.ui {
-            ui.get_current_style().as_str().to_string()
-        } else {
-            String::new()
-        }
-    })
-}
-
-pub fn set_status_text(text: &str) {
-    let text = text.to_string();
-
-    i_slint_core::api::invoke_from_event_loop(move || {
-        PREVIEW_STATE.with(|preview_state| {
-            let preview_state = preview_state.borrow_mut();
-            if let Some(ui) = &preview_state.ui {
-                ui.set_status_text(text.into());
-            }
-        });
-    })
-    .unwrap();
-}
-
-pub fn set_diagnostics(diagnostics: &[slint_interpreter::Diagnostic]) {
-    let data = crate::preview::ui::convert_diagnostics(diagnostics);
-
-    i_slint_core::api::invoke_from_event_loop(move || {
-        PREVIEW_STATE.with(|preview_state| {
-            let preview_state = preview_state.borrow_mut();
-            if let Some(ui) = &preview_state.ui {
-                let model = VecModel::from(data);
-                ui.set_diagnostics(Rc::new(model).into());
-            }
-        });
-    })
-    .unwrap();
 }
 
 pub fn send_status(message: &str, health: Health) {
@@ -303,74 +226,21 @@ pub fn send_status(message: &str, health: Health) {
         return;
     };
 
-    crate::preview::send_status_notification(&sender, message, health)
+    crate::common::lsp_to_editor::send_status_notification(&sender, message, health)
 }
 
-pub fn ask_editor_to_show_document(
-    file: String,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
-) {
+pub fn ask_editor_to_show_document(file: &str, selection: lsp_types::Range) {
     let Some(sender) = SERVER_NOTIFIER.get_or_init(Default::default).lock().unwrap().clone() else {
         return;
     };
-
-    let fut = crate::send_show_document_to_editor(
-        sender,
-        file,
-        start_line,
-        start_column,
-        end_line,
-        end_column,
-    );
-
+    let Ok(url) = lsp_types::Url::from_file_path(file) else { return };
+    let fut = crate::common::lsp_to_editor::send_show_document_to_editor(sender, url, selection);
     slint_interpreter::spawn_local(fut).unwrap(); // Fire and forget.
 }
 
-pub fn configure_design_mode(enabled: bool) {
-    run_in_ui_thread(move || async move {
-        PREVIEW_STATE.with(|preview_state| {
-            let preview_state = preview_state.borrow();
-            let handle = preview_state.handle.borrow();
-            if let Some(handle) = &*handle {
-                super::configure_handle_for_design_mode(handle, enabled);
-            }
-        })
-    });
-}
-
-/// This runs `set_preview_factory` in the UI thread
-pub fn update_preview_area(compiled: slint_interpreter::ComponentDefinition, design_mode: bool) {
-    PREVIEW_STATE.with(|preview_state| {
-        let mut preview_state = preview_state.borrow_mut();
-
-        open_ui_impl(&mut preview_state);
-
-        let shared_handle = preview_state.handle.clone();
-
-        super::set_preview_factory(
-            preview_state.ui.as_ref().unwrap(),
-            compiled,
-            Box::new(move |instance| {
-                shared_handle.replace(Some(instance));
-            }),
-            design_mode,
-        );
-    });
-}
-
-/// Highlight the element pointed at the offset in the path.
-/// When path is None, remove the highlight.
-pub fn update_highlight(path: PathBuf, offset: u32) {
-    run_in_ui_thread(move || async move {
-        PREVIEW_STATE.with(|preview_state| {
-            let preview_state = preview_state.borrow();
-            let handle = preview_state.handle.borrow();
-            if let Some(handle) = &*handle {
-                handle.highlight(path, offset);
-            }
-        })
-    })
+pub fn send_message_to_lsp(message: crate::common::PreviewToLspMessage) {
+    let Some(sender) = SERVER_NOTIFIER.get_or_init(Default::default).lock().unwrap().clone() else {
+        return;
+    };
+    sender.send_message_to_lsp(message);
 }

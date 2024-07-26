@@ -4,11 +4,11 @@
 import { DemoPalette, Page } from "common.slint";
 import { HomePage } from "./home_page.slint";
 import { InkLevel, InkPage } from "./ink_page.slint";
-import { SettingsPage } from "./settings_page.slint";
+import { SettingsPage, PrinterSettings } from "./settings_page.slint";
 import { PrinterQueue } from "./printer_queue.slint";
 
 // re-export for the native code
-export { PrinterQueue }
+export { PrinterQueue, PrinterSettings }
 
 import "./fonts/NotoSans-Regular.ttf";
 import "./fonts/NotoSans-Bold.ttf";
@@ -28,8 +28,8 @@ component SideBarIcon inherits Rectangle {
     }
 }
 
-component MainWindow inherits Window {
-      /// Note that this property is overwritten in the .cpp and .rs code.
+export component MainWindow inherits Window {
+    /// Note that this property is overwritten in the .cpp and .rs code.
     /// The data is only in this file so it looks good in the viewer
     in property <[InkLevel]> ink-levels: [
         {color: #0ff, level: 60%},
@@ -38,6 +38,9 @@ component MainWindow inherits Window {
         {color: #000, level: 30%},
     ];
     out property <int> active-page: 0;
+
+    property <bool> test-bool: true;
+    property <string> test-string: "Test Me";
 
     callback quit();
 

@@ -36,13 +36,21 @@ A fictional user interface of a device that monitors energy consumption in a bui
 
 ### [`todo`](./todo)
 
-A simple todo mvc application
+A simple todo application
 
 | `.slint` Design | Rust Source | C++ Source | NodeJS | Online wasm Preview | Open in SlintPad |
 | --- | --- | --- | --- | --- | --- |
 | [`todo.slint`](./todo/ui/todo.slint) | [`main.rs`](./todo/rust/main.rs) | [`main.cpp`](./todo/cpp/main.cpp) | [`main.js`](./todo/node/main.js) | [Online simulation](https://slint.dev/snapshots/master/demos/todo/) | [Preview in Online Code Editor](https://slint.dev/snapshots/master/editor?load_url=https://raw.githubusercontent.com/slint-ui/slint/master/examples/todo/ui/todo.slint) |
 
 ![Screenshot of the Todo Demo](https://slint.dev/resources/todo_screenshot.png "Todo Demo")
+
+### [`todo-mvc`](./todo-mvc)
+
+A simple todo application based on the [Model View Controller](https://en.wikipedia.org/wiki/Model%E2%80%93view%E2%80%93controller) pattern.
+
+| `.slint` Design | Rust Source | Online wasm Preview | Open in SlintPad |
+| --- | --- | --- | --- |
+| [`index.slint`](./todo-mvc/ui/index.slint) | [`main.rs`](./todo/rust/main.rs) | [Online simulation](https://slint.dev/snapshots/master/demos/todo-mvc/) | [Preview in Online Code Editor](https://slint.dev/snapshots/master/editor?load_url=https://raw.githubusercontent.com/slint-ui/slint/master/examples/todo-mvc/ui/index.slint) |
 
 ### [`carousel`](./carousel)
 
@@ -70,8 +78,8 @@ Puzzle game based on a Flutter example. See [Readme](./slide_puzzle)
 
 A basic memory game used as an example the tutorial:
 
-* [Memory Game Tutorial (Rust)](https://slint.dev/docs/tutorial/rust)
-* [Memory Game Tutorial (C++)](https://slint.dev/docs/tutorial/cpp)
+* [Memory Game Tutorial (Rust)](https://slint.dev/docs/quickstart/rust)
+* [Memory Game Tutorial (C++)](https://slint.dev/docs/quickstart/cpp)
 
 | `.slint` Design | Rust Source | C++ Source | Online wasm Preview | Open in SlintPad |
 | --- | --- | --- | --- | --- |
@@ -145,6 +153,12 @@ A Rust example that shows how render video frames with FFmpeg within a Slint sce
 
 ![Screenshot of the FFmpeg Example on macOS](https://github.com/slint-ui/slint/assets/1486/5a1fad32-611a-478e-ab8f-576b4b4bdaf3 "FFmpeg Example")
 
+### [`maps`](./maps)
+
+A rust example that load image tiles asynchronously from OpenStreetMap server and allow panning and zooming
+
+![Screenshot of the maps example](https://github.com/slint-ui/slint/assets/959326/f5e8cca6-dee1-4681-83da-88fec27f9a45 "Maps example")
+
 ### [`virtual keyboard`](./virtual_keyboard)
 
 | `.slint` Design | Rust Source | C++ Source |
@@ -161,6 +175,18 @@ A Rust and C++ example that shows how to implement a custom virtual keyboard in 
 Our implementations of the ["7GUIs"](https://7guis.github.io/7guis/) Tasks.
 
 ![Composition of 7GUIs Screenshots](https://user-images.githubusercontent.com/22800467/169002497-5b90e63b-5717-4290-8ac7-c618d9e2a4f1.png "7GUIs")
+
+### [`weather-demo`](./weather-demo)
+
+A simple, cross-platform (Desktop, Android, Wasm) weather application using real weather data from the [OpenWeather](https://openweathermap.org/) API.
+
+| `.slint` Design | Rust Source (Desktop) | Rust Source (Android / Wasm) | Online wasm Preview | Open in SlintPad |
+| --- | --- | --- | --- | --- |
+| [`main.slint`](./weather-demo/ui/main.slint) | [`main.rs`](./weather-demo/src/main.rs) | [`lib.rs`](./weather-demo/src/lib.rs) | [Online simulation](https://slint.dev/snapshots/master/demos/weather-demo/) | [Preview in Online Code Editor](https://slint.dev/snapshots/master/editor?load_url=https://raw.githubusercontent.com/slint-ui/slint/master/examples/weather-demo/ui/main.slint) |
+
+![Screenshot of the Weather Demo Desktop](./weather-demo/docs/img/desktop-preview.png "Weather Demo Desktop")
+
+![Screenshot of the Weather Demo Desktop](./weather-demo/docs/img/android-preview.png "Weather Demo Android")
 
 ### External examples
 

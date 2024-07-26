@@ -1,13 +1,12 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use crate::api::{SetPropertyError, Struct, Value};
 use crate::dynamic_item_tree::InstanceRef;
-use core::convert::TryInto;
 use core::pin::Pin;
 use corelib::graphics::{GradientStop, LinearGradientBrush, PathElement, RadialGradientBrush};
-use corelib::items::{ItemRef, PropertyAnimation};
-use corelib::model::{Model, ModelRc};
+use corelib::items::{ColorScheme, ItemRef, PropertyAnimation};
+use corelib::model::{Model, ModelExt, ModelRc, VecModel};
 use corelib::rtti::AnimatedBindingKind;
 use corelib::{Brush, Color, PathData, SharedString, SharedVector};
 use i_slint_compiler::expression_tree::{
@@ -154,12 +153,12 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
         }
         Expression::RepeaterIndexReference { element } => load_property_helper(local_context.component_instance,
             &element.upgrade().unwrap().borrow().base_type.as_component().root_element,
-            "index",
+            crate::dynamic_item_tree::SPECIAL_PROPERTY_INDEX,
         )
         .unwrap(),
         Expression::RepeaterModelReference { element } => load_property_helper(local_context.component_instance,
             &element.upgrade().unwrap().borrow().base_type.as_component().root_element,
-            "model_data",
+            crate::dynamic_item_tree::SPECIAL_PROPERTY_MODEL_DATA,
         )
         .unwrap(),
         Expression::FunctionParameterReference { index, .. } => {
@@ -177,12 +176,7 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
             let index = eval_expression(index, local_context);
             match (array, index) {
                 (Value::Model(model), Value::Number(index)) => {
-                    if (index as usize) < model.row_count() {
-                        model.model_tracker().track_row_data_changes(index as usize);
-                        model.row_data(index as usize).unwrap_or_else(|| default_value_for_type(&expression.ty()))
-                    } else {
-                        default_value_for_type(&expression.ty())
-                    }
+                    model.row_data_tracked(index as usize).unwrap_or_else(|| default_value_for_type(&expression.ty()))
                 }
                 _ => {
                     Value::Void
@@ -271,36 +265,27 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
                 (sub, op) => panic!("unsupported {} {:?}", op, sub),
             }
         }
-        Expression::ImageReference{ resource_ref, .. } => {
-            Value::Image(match resource_ref {
+        Expression::ImageReference{ resource_ref, nine_slice, .. } => {
+            let mut image = match resource_ref {
                 i_slint_compiler::expression_tree::ImageReference::None => {
                     Ok(Default::default())
                 }
                 i_slint_compiler::expression_tree::ImageReference::AbsolutePath(path) => {
-                    corelib::graphics::Image::load_from_path(std::path::Path::new(path))
-                }
-                i_slint_compiler::expression_tree::ImageReference::EmbeddedData { resource_id, extension } => {
-                    let toplevel_instance = match local_context.component_instance {
-                        ComponentInstance::InstanceRef(instance) => instance.toplevel_instance(),
-                        ComponentInstance::GlobalComponent(_) => unimplemented!(),
-                    };
-                    let extra_data = toplevel_instance.description.extra_data_offset.apply(toplevel_instance.as_ref());
-                    let path = extra_data.embedded_file_resources.get().unwrap().get(resource_id).expect("internal error: invalid resource id");
-
-                    let virtual_file = i_slint_compiler::fileaccess::load_file(std::path::Path::new(path)).unwrap();  // embedding pass ensured that the file exists
-
-                    if let (static_path, Some(static_data)) = (virtual_file.canon_path, virtual_file.builtin_contents) {
-                        let virtual_file_extension = static_path.extension().unwrap().to_str().unwrap();
-                        debug_assert_eq!(virtual_file_extension, extension);
-                        Ok(corelib::graphics::load_image_from_embedded_data(
-                            corelib::slice::Slice::from_slice(static_data),
-                            corelib::slice::Slice::from_slice(virtual_file_extension.as_bytes())
-                        ))
+                    let path = std::path::Path::new(path);
+                    if path.starts_with("builtin:/") {
+                        i_slint_compiler::fileaccess::load_file(path).and_then(|virtual_file| virtual_file.builtin_contents).map(|virtual_file| {
+                            let extension = path.extension().unwrap().to_str().unwrap();
+                            corelib::graphics::load_image_from_embedded_data(
+                                corelib::slice::Slice::from_slice(virtual_file),
+                                corelib::slice::Slice::from_slice(extension.as_bytes())
+                            )
+                        }).ok_or_else(Default::default)
                     } else {
-                        corelib::debug_log!("Cannot embed images from disk {}", path);
-                        Ok(corelib::graphics::Image::default())
-
+                        corelib::graphics::Image::load_from_path(path)
                     }
+                }
+                i_slint_compiler::expression_tree::ImageReference::EmbeddedData { .. } => {
+                    todo!()
                 }
                 i_slint_compiler::expression_tree::ImageReference::EmbeddedTexture { .. } => {
                     todo!()
@@ -308,7 +293,11 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
             }.unwrap_or_else(|_| {
                 eprintln!("Could not load image {:?}",resource_ref );
                 Default::default()
-            }))
+            });
+            if let Some(n) = nine_slice {
+                image.set_nine_slice_edges(n[0], n[1], n[2], n[3]);
+            }
+            Value::Image(image)
         }
         Expression::Condition { condition, true_expr, false_expr } => {
             match eval_expression(condition, local_context).try_into()
@@ -405,6 +394,7 @@ pub fn eval_expression(expression: &Expression, local_context: &mut EvalLocalCon
                 MinMaxOp::Max => Value::Number(lhs.max(rhs)),
             }
         }
+        Expression::EmptyComponentFactory => Value::ComponentFactory(Default::default())
     }
 }
 
@@ -523,14 +513,54 @@ fn call_builtin_function(
                     enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
 
                 component.access_window(|window| {
-                    window.set_focus_item(&corelib::items::ItemRc::new(
-                        vtable::VRc::into_dyn(focus_item_comp),
-                        item_info.item_index(),
-                    ))
+                    window.set_focus_item(
+                        &corelib::items::ItemRc::new(
+                            vtable::VRc::into_dyn(focus_item_comp),
+                            item_info.item_index(),
+                        ),
+                        true,
+                    )
                 });
                 Value::Void
             } else {
                 panic!("internal error: argument to SetFocusItem must be an element")
+            }
+        }
+        BuiltinFunction::ClearFocusItem => {
+            if arguments.len() != 1 {
+                panic!("internal error: incorrect argument count to SetFocusItem")
+            }
+            let component = match local_context.component_instance {
+                ComponentInstance::InstanceRef(c) => c,
+                ComponentInstance::GlobalComponent(_) => {
+                    panic!("Cannot access the focus item from a global component")
+                }
+            };
+            if let Expression::ElementReference(focus_item) = &arguments[0] {
+                generativity::make_guard!(guard);
+
+                let focus_item = focus_item.upgrade().unwrap();
+                let enclosing_component =
+                    enclosing_component_for_element(&focus_item, component, guard);
+                let description = enclosing_component.description;
+
+                let item_info = &description.items[focus_item.borrow().id.as_str()];
+
+                let focus_item_comp =
+                    enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
+
+                component.access_window(|window| {
+                    window.set_focus_item(
+                        &corelib::items::ItemRc::new(
+                            vtable::VRc::into_dyn(focus_item_comp),
+                            item_info.item_index(),
+                        ),
+                        false,
+                    )
+                });
+                Value::Void
+            } else {
+                panic!("internal error: argument to ClearFocusItem must be an element")
             }
         }
         BuiltinFunction::ShowPopupWindow => {
@@ -557,18 +587,6 @@ fn call_builtin_function(
                 let popup_list = parent_component.popup_windows.borrow();
                 let popup =
                     popup_list.iter().find(|p| Rc::ptr_eq(&p.component, &pop_comp)).unwrap();
-                let x = load_property_helper(
-                    local_context.component_instance,
-                    &popup.x.element(),
-                    popup.x.name(),
-                )
-                .unwrap();
-                let y = load_property_helper(
-                    local_context.component_instance,
-                    &popup.y.element(),
-                    popup.y.name(),
-                )
-                .unwrap();
 
                 generativity::make_guard!(guard);
                 let enclosing_component =
@@ -584,12 +602,19 @@ fn call_builtin_function(
 
                 crate::dynamic_item_tree::show_popup(
                     popup,
-                    i_slint_core::graphics::Point::new(
-                        x.try_into().unwrap(),
-                        y.try_into().unwrap(),
-                    ),
+                    |instance_ref| {
+                        let comp = ComponentInstance::InstanceRef(instance_ref);
+                        let x =
+                            load_property_helper(comp, &popup.x.element(), popup.x.name()).unwrap();
+                        let y =
+                            load_property_helper(comp, &popup.y.element(), popup.y.name()).unwrap();
+                        i_slint_core::graphics::Point::new(
+                            x.try_into().unwrap(),
+                            y.try_into().unwrap(),
+                        )
+                    },
                     popup.close_on_click,
-                    component.borrow(),
+                    component.self_weak().get().unwrap().clone(),
                     component.window_adapter(),
                     &parent_item,
                 );
@@ -609,6 +634,59 @@ fn call_builtin_function(
             component.access_window(|window| window.close_popup());
 
             Value::Void
+        }
+        BuiltinFunction::SetSelectionOffsets => {
+            if arguments.len() != 3 {
+                panic!("internal error: incorrect argument count to select range function call")
+            }
+            let component = match local_context.component_instance {
+                ComponentInstance::InstanceRef(c) => c,
+                ComponentInstance::GlobalComponent(_) => {
+                    panic!("Cannot invoke member function on item from a global component")
+                }
+            };
+            if let Expression::ElementReference(element) = &arguments[0] {
+                generativity::make_guard!(guard);
+
+                let elem = element.upgrade().unwrap();
+                let enclosing_component = enclosing_component_for_element(&elem, component, guard);
+                let description = enclosing_component.description;
+                let item_info = &description.items[elem.borrow().id.as_str()];
+                let item_ref =
+                    unsafe { item_info.item_from_item_tree(enclosing_component.as_ptr()) };
+
+                let item_comp = enclosing_component.self_weak().get().unwrap().upgrade().unwrap();
+                let item_rc = corelib::items::ItemRc::new(
+                    vtable::VRc::into_dyn(item_comp),
+                    item_info.item_index(),
+                );
+
+                let window_adapter = component.window_adapter();
+
+                // TODO: Make this generic through RTTI
+                if let Some(textinput) =
+                    ItemRef::downcast_pin::<corelib::items::TextInput>(item_ref)
+                {
+                    let start: i32 =
+                        eval_expression(&arguments[1], local_context).try_into().expect(
+                            "internal error: second argument to set-selection-offsets must be an integer",
+                        );
+                    let end: i32 = eval_expression(&arguments[2], local_context).try_into().expect(
+                        "internal error: third argument to set-selection-offsets must be an integer",
+                    );
+
+                    textinput.set_selection_offsets(&window_adapter, &item_rc, start, end);
+                } else {
+                    panic!(
+                        "internal error: member function called on element that doesn't have it: {}",
+                        elem.borrow().original_name()
+                    )
+                }
+
+                Value::Void
+            } else {
+                panic!("internal error: first argument to set-selection-offsets must be an element")
+            }
         }
         BuiltinFunction::ItemMemberFunction(name) => {
             if arguments.len() != 1 {
@@ -659,7 +737,7 @@ fn call_builtin_function(
 
                 Value::Void
             } else {
-                panic!("internal error: argument to TextInputSelectAll must be an element")
+                panic!("internal error: argument to set-selection-offsetsAll must be an element")
             }
         }
         BuiltinFunction::StringIsFloat => {
@@ -680,6 +758,42 @@ fn call_builtin_function(
                 Value::Number(core::str::FromStr::from_str(s.as_str()).unwrap_or(0.))
             } else {
                 panic!("Argument not a string");
+            }
+        }
+        BuiltinFunction::ColorRgbaStruct => {
+            if arguments.len() != 1 {
+                panic!("internal error: incorrect argument count to ColorRGBAComponents")
+            }
+            if let Value::Brush(brush) = eval_expression(&arguments[0], local_context) {
+                let color = brush.color();
+                let values = IntoIterator::into_iter([
+                    ("red".to_string(), Value::Number(color.red().into())),
+                    ("green".to_string(), Value::Number(color.green().into())),
+                    ("blue".to_string(), Value::Number(color.blue().into())),
+                    ("alpha".to_string(), Value::Number(color.alpha().into())),
+                ])
+                .collect();
+                Value::Struct(values)
+            } else {
+                panic!("First argument not a color");
+            }
+        }
+        BuiltinFunction::ColorHsvaStruct => {
+            if arguments.len() != 1 {
+                panic!("internal error: incorrect argument count to ColorHSVAComponents")
+            }
+            if let Value::Brush(brush) = eval_expression(&arguments[0], local_context) {
+                let color = brush.color().to_hsva();
+                let values = IntoIterator::into_iter([
+                    ("hue".to_string(), Value::Number(color.hue.into())),
+                    ("saturation".to_string(), Value::Number(color.saturation.into())),
+                    ("value".to_string(), Value::Number(color.value.into())),
+                    ("alpha".to_string(), Value::Number(color.alpha.into())),
+                ])
+                .collect();
+                Value::Struct(values)
+            } else {
+                panic!("First argument not a color");
             }
         }
         BuiltinFunction::ColorBrighter => {
@@ -803,23 +917,74 @@ fn call_builtin_function(
             let g: i32 = eval_expression(&arguments[1], local_context).try_into().unwrap();
             let b: i32 = eval_expression(&arguments[2], local_context).try_into().unwrap();
             let a: f32 = eval_expression(&arguments[3], local_context).try_into().unwrap();
-            let r: u8 = r.max(0).min(255) as u8;
-            let g: u8 = g.max(0).min(255) as u8;
-            let b: u8 = b.max(0).min(255) as u8;
-            let a: u8 = (255. * a).max(0.).min(255.) as u8;
+            let r: u8 = r.clamp(0, 255) as u8;
+            let g: u8 = g.clamp(0, 255) as u8;
+            let b: u8 = b.clamp(0, 255) as u8;
+            let a: u8 = (255. * a).clamp(0., 255.) as u8;
             Value::Brush(Brush::SolidColor(Color::from_argb_u8(a, r, g, b)))
         }
-        BuiltinFunction::DarkColorScheme => match local_context.component_instance {
-            ComponentInstance::InstanceRef(component) => Value::Bool(
-                component
-                    .window_adapter()
-                    .internal(corelib::InternalToken)
-                    .map_or(false, |x| x.dark_color_scheme()),
-            ),
+        BuiltinFunction::Hsv => {
+            let h: f32 = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let s: f32 = eval_expression(&arguments[1], local_context).try_into().unwrap();
+            let v: f32 = eval_expression(&arguments[2], local_context).try_into().unwrap();
+            let a: f32 = eval_expression(&arguments[3], local_context).try_into().unwrap();
+            let a = (1. * a).clamp(0., 1.);
+            Value::Brush(Brush::SolidColor(Color::from_hsva(h, s, v, a)))
+        }
+        BuiltinFunction::ColorScheme => match local_context.component_instance {
+            ComponentInstance::InstanceRef(component) => component
+                .window_adapter()
+                .internal(corelib::InternalToken)
+                .map_or(ColorScheme::Unknown, |x| x.color_scheme())
+                .into(),
             ComponentInstance::GlobalComponent(_) => {
                 panic!("Cannot get the window from a global component")
             }
         },
+        BuiltinFunction::MonthDayCount => {
+            let m: u32 = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let y: i32 = eval_expression(&arguments[1], local_context).try_into().unwrap();
+            Value::Number(i_slint_core::date_time::month_day_count(m, y).unwrap_or(0) as f64)
+        }
+        BuiltinFunction::MonthOffset => {
+            let m: u32 = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let y: i32 = eval_expression(&arguments[1], local_context).try_into().unwrap();
+
+            Value::Number(i_slint_core::date_time::month_offset(m, y) as f64)
+        }
+        BuiltinFunction::FormatDate => {
+            let f: SharedString = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let d: u32 = eval_expression(&arguments[1], local_context).try_into().unwrap();
+            let m: u32 = eval_expression(&arguments[2], local_context).try_into().unwrap();
+            let y: i32 = eval_expression(&arguments[3], local_context).try_into().unwrap();
+
+            Value::String(i_slint_core::date_time::format_date(&f, d, m, y))
+        }
+        BuiltinFunction::DateNow => Value::Model(ModelRc::new(VecModel::from(
+            i_slint_core::date_time::date_now()
+                .into_iter()
+                .map(|x| Value::Number(x as f64))
+                .collect::<Vec<_>>(),
+        ))),
+        BuiltinFunction::ValidDate => {
+            let d: SharedString = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let f: SharedString = eval_expression(&arguments[1], local_context).try_into().unwrap();
+            Value::Bool(i_slint_core::date_time::parse_date(d.as_str(), f.as_str()).is_some())
+        }
+        BuiltinFunction::ParseDate => {
+            let d: SharedString = eval_expression(&arguments[0], local_context).try_into().unwrap();
+            let f: SharedString = eval_expression(&arguments[1], local_context).try_into().unwrap();
+
+            Value::Model(ModelRc::new(
+                i_slint_core::date_time::parse_date(d.as_str(), f.as_str())
+                    .map(|x| {
+                        VecModel::from(
+                            x.into_iter().map(|x| Value::Number(x as f64)).collect::<Vec<_>>(),
+                        )
+                    })
+                    .unwrap_or_default(),
+            ))
+        }
         BuiltinFunction::TextInputFocused => match local_context.component_instance {
             ComponentInstance::InstanceRef(component) => {
                 Value::Bool(component.access_window(|window| window.text_input_focused()) as _)
@@ -952,6 +1117,7 @@ fn call_builtin_function(
                 &SharedString::try_from(eval_expression(&arguments[5], local_context)).unwrap(),
             ))
         }
+        BuiltinFunction::Use24HourFormat => Value::Bool(corelib::date_time::use_24_hour_format()),
     }
 }
 
@@ -1300,32 +1466,6 @@ pub(crate) fn call_function(
     }
 }
 
-fn root_component_instance<'a, 'old_id, 'new_id>(
-    component: InstanceRef<'a, 'old_id>,
-    _guard: generativity::Guard<'new_id>,
-) -> InstanceRef<'a, 'new_id> {
-    if let Some(parent_offset) = component.description.parent_item_tree_offset {
-        let parent_component =
-            if let Some(parent) = parent_offset.apply(component.instance.get_ref()).get() {
-                *parent
-            } else {
-                panic!("invalid parent ptr");
-            };
-        // we need a 'static guard in order to be able to re-borrow with lifetime 'a.
-        // Safety: This is the only 'static Id in scope.
-        let static_guard = unsafe { generativity::Guard::new(generativity::Id::<'static>::new()) };
-        root_component_instance(
-            unsafe { InstanceRef::from_pin_ref(parent_component, static_guard) },
-            _guard,
-        )
-    } else {
-        // Safety: new_id is an unique id
-        unsafe {
-            std::mem::transmute::<InstanceRef<'a, 'old_id>, InstanceRef<'a, 'new_id>>(component)
-        }
-    }
-}
-
 /// Return the component instance which hold the given element.
 /// Does not take in account the global component.
 pub fn enclosing_component_for_element<'a, 'old_id, 'new_id>(
@@ -1341,18 +1481,12 @@ pub fn enclosing_component_for_element<'a, 'old_id, 'new_id>(
         }
     } else {
         assert!(!enclosing.is_global());
-        let parent_component = component
-            .description
-            .parent_item_tree_offset
-            .unwrap()
-            .apply(component.as_ref())
-            .get()
-            .unwrap();
-        generativity::make_guard!(new_guard);
-        let parent_instance = unsafe { InstanceRef::from_pin_ref(*parent_component, new_guard) };
-        let parent_instance = unsafe {
-            core::mem::transmute::<InstanceRef, InstanceRef<'a, 'static>>(parent_instance)
-        };
+        // Safety: this is the only place we use this 'static lifetime in this function and nothing is returned with it
+        // For some reason we can't make a new guard here because the compiler thinks we are returning that
+        // (it assumes that the 'id must outlive 'a , which is not true)
+        let static_guard = unsafe { generativity::Guard::new(generativity::Id::<'static>::new()) };
+
+        let parent_instance = component.parent_instance(static_guard).unwrap();
         enclosing_component_for_element(element, parent_instance, _guard)
     }
 }
@@ -1368,11 +1502,7 @@ pub(crate) fn enclosing_component_instance_for_element<'a, 'new_id>(
     match component_instance {
         ComponentInstance::InstanceRef(component) => {
             if enclosing.is_global() && !Rc::ptr_eq(enclosing, &component.description.original) {
-                // we need a 'static guard in order to be able to borrow from `root` otherwise it does not work because of variance.
-                // Safety: This is the only 'static Id in scope.
-                let static_guard =
-                    unsafe { generativity::Guard::new(generativity::Id::<'static>::new()) };
-                let root = root_component_instance(component, static_guard);
+                let root = component.toplevel_instance(guard);
                 ComponentInstance::GlobalComponent(
                     &root
                         .description

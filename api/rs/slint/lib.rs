@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore buildrs
 
@@ -9,7 +9,7 @@
 This crate is the main entry point for embedding user interfaces designed with
 [Slint](https://slint.rs/) in Rust programs.
 */
-#![doc = concat!("If you are new to Slint, start with the [Walk-through **tutorial**](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/tutorial/rust)")]
+#![doc = concat!("If you are new to Slint, start with the [Walk-through **tutorial**](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/quickstart)")]
 /*! If you are already familiar with Slint, the following topics provide related information.
 
 ## Topics
@@ -71,11 +71,11 @@ build = "build.rs"
 edition = "2021"
 
 [dependencies]
-slint = "1.3.0"
+slint = "1.7.0"
 ...
 
 [build-dependencies]
-slint-build = "1.3.0"
+slint-build = "1.7.0"
 ```
 
 Use the API of the slint-build crate in the `build.rs` file:
@@ -106,11 +106,10 @@ cargo generate --git https://github.com/slint-ui/slint-rust-template
 
 ## Generated components
 
-Currently, only the last component in a `.slint` source file is mapped to a Rust structure that be instantiated. We are tracking the
-resolution of this limitation in <https://github.com/slint-ui/slint/issues/784>.
+Exported component from the macro or the main file that inherit `Window` or `Dialog` is mapped to a Rust structure.
 
-The component is generated and re-exported to the location of the [`include_modules!`]  or [`slint!`] macro. It is represented
-as a struct with the same name as the component.
+The components are generated and re-exported to the location of the [`include_modules!`] or [`slint!`] macro.
+It is represented as a struct with the same name as the component.
 
 For example, if you have
 
@@ -165,10 +164,12 @@ thread to avoid blocking animations. Use the [`invoke_from_event_loop`] function
 
 To run a function with a delay or with an interval use a [`Timer`].
 
+To run an async function or a future, use [`spawn_local()`].
+
 ## Exported Global singletons
 
 */
-#![doc = concat!("When you export a [global singleton](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/reference/globals.html) from the main file,")]
+#![doc = concat!("When you export a [global singleton](https://slint.dev/releases/", env!("CARGO_PKG_VERSION"), "/docs/slint/src/language/syntax/globals.html) from the main file,")]
 /*! it is also generated with the exported name. Like the main component, the generated struct have
 inherent method to access the properties and callback:
 
@@ -183,6 +184,9 @@ For each callback
 The global can be accessed with the [`ComponentHandle::global()`] function, or with [`Global::get()`]
 
 See the [documentation of the `Global` trait](Global) for an example.
+
+**Note**: Global singletons are instantiated once per component. When declaring multiple components for `export` to Rust,
+each instance will have their own instance of associated globals singletons.
 */
 
 #![warn(missing_docs)]
@@ -207,6 +211,7 @@ pub use i_slint_core::api::*;
 pub use i_slint_core::component_factory::ComponentFactory;
 #[cfg(not(target_arch = "wasm32"))]
 pub use i_slint_core::graphics::{BorrowedOpenGLTextureBuilder, BorrowedOpenGLTextureOrigin};
+// keep in sync with internal/interpreter/api.rs
 pub use i_slint_core::graphics::{
     Brush, Color, Image, LoadImageError, Rgb8Pixel, Rgba8Pixel, RgbaColor, SharedPixelBuffer,
 };
@@ -221,10 +226,29 @@ pub use i_slint_core::{format, string::SharedString};
 pub mod private_unstable_api;
 
 /// Enters the main event loop. This is necessary in order to receive
-/// events from the windowing system in order to render to the screen
-/// and react to user input.
+/// events from the windowing system for rendering to the screen
+/// and reacting to user input.
+/// This function will run until the last window is closed or until
+/// [`quit_event_loop()`] is called.
+///
+/// See also [`run_event_loop_until_quit()`] to keep the event loop running until
+/// [`quit_event_loop()`] is called, even if all windows are closed.
 pub fn run_event_loop() -> Result<(), PlatformError> {
     i_slint_backend_selector::with_platform(|b| b.run_event_loop())
+}
+
+/// Similar to [`run_event_loop()`], but this function enters the main event loop
+/// and continues to run even when the last window is closed, until
+/// [`quit_event_loop()`] is called.
+///
+/// This is useful for system tray applications where the application needs to stay alive
+/// even if no windows are visible.
+pub fn run_event_loop_until_quit() -> Result<(), PlatformError> {
+    i_slint_backend_selector::with_platform(|b| {
+        #[allow(deprecated)]
+        b.set_event_loop_quit_on_last_window_closed(false);
+        b.run_event_loop()
+    })
 }
 
 /// Include the code generated with the slint-build crate from the build script. After calling `slint_build::compile`
@@ -296,10 +320,19 @@ pub mod platform {
     }
 }
 
+#[cfg(any(
+    doc,
+    all(
+        target_os = "android",
+        any(feature = "backend-android-activity-05", feature = "backend-android-activity-06")
+    )
+))]
+pub mod android;
+
 /// Helper type that helps checking that the generated code is generated for the right version
 #[doc(hidden)]
 #[allow(non_camel_case_types)]
-pub struct VersionCheck_1_3_2;
+pub struct VersionCheck_1_7_1;
 
 #[cfg(doctest)]
 mod compile_fail_tests;

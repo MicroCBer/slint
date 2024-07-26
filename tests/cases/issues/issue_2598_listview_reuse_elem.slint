@@ -1,12 +1,12 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 
 import { ListView } from "std-widgets.slint";
 
 export component  TestCase {
-    height: 100px;
-    width: 100px;
+    height: 150px;
+    width: 150px;
     in-out property <int> clicked;
     in-out property viewport-y <=> lv.viewport-y;
     in-out property <[int]> mod: [0,1,2,3,4,5,6,7,8,9];

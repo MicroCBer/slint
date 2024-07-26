@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 import { FluentFontSettings, FluentPalette } from "styling.slint";
 import { LineEditBase} from "../common/lineedit-base.slint";
@@ -16,6 +16,14 @@ export component LineEdit {
 
     callback accepted <=> i-base.accepted;
     callback edited <=> i-base.edited;
+    accessible-role: text-input;
+    accessible-value <=> text;
+    accessible-placeholder-text: text == "" ? placeholder-text : "";
+    accessible-action-set-value(v) => { text = v; edited(v); }
+
+    public function set-selection-offsets(start: int, end: int) {
+        i-base.set-selection-offsets(start, end);
+    }
 
     public function select-all() {
         i-base.select-all();
@@ -48,20 +56,20 @@ export component LineEdit {
             i-background.background: FluentPalette.control-disabled;
             i-background.border-color: FluentPalette.border;
             i-base.text-color: FluentPalette.text-disabled;
-            i-base.selection-foreground-color: FluentPalette.text-on-accent-disabled;
+            i-base.selection-foreground-color: FluentPalette.text-accent-foreground-disabled;
             i-base.placeholder-color: FluentPalette.text-disabled;
         }
         focused when root.has-focus : {
             i-background.background: FluentPalette.control-input-active;
             i-background.border-color: FluentPalette.border;
-            i-focus-border.background: FluentPalette.accent;
+            i-focus-border.background: FluentPalette.accent-background;
             i-base.placeholder-color: FluentPalette.text-tertiary;
         }
     ]
 
     i-background := Rectangle {
         border-radius: 4px;
-        background: FluentPalette.surface;
+        background: FluentPalette.control-background;
         border-width: 1px;
         border-color: FluentPalette.text-control-border;
 
@@ -72,8 +80,8 @@ export component LineEdit {
             i-base := LineEditBase {
                 font-size: FluentFontSettings.body.font-size;
                 font-weight: FluentFontSettings.body.font-weight;
-                selection-background-color: FluentPalette.accent-selected-text;
-                selection-foreground-color: FluentPalette.on-accent;
+                selection-background-color: FluentPalette.selection-background;
+                selection-foreground-color: FluentPalette.accent-foreground;
                 text-color: FluentPalette.foreground;
                 placeholder-color: FluentPalette.text-secondary;
                 margin: i-layout.padding-left + i-layout.padding-right;

@@ -1,7 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
-
-use super::DocumentCache;
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use i_slint_compiler::diagnostics::{DiagnosticLevel, SourceFile, Spanned};
 use i_slint_compiler::langtype::{ElementType, Type};
@@ -11,21 +9,24 @@ use i_slint_compiler::parser::{syntax_nodes, SyntaxKind, SyntaxNode, SyntaxToken
 use i_slint_compiler::parser::{TextRange, TextSize};
 use i_slint_compiler::typeregister::TypeRegister;
 
+use crate::common;
+
 #[cfg(target_arch = "wasm32")]
 use crate::wasm_prelude::UrlWasm;
 
 pub fn map_node_and_url(node: &SyntaxNode) -> Option<(lsp_types::Url, lsp_types::Range)> {
+    let sf = node.source_file()?;
     let range = node.text_range();
-    node.source_file().map(|sf| {
-        (
-            lsp_types::Url::from_file_path(sf.path()).unwrap_or_else(|_| invalid_url()),
-            map_range(sf, range),
-        )
-    })
+    Some((lsp_types::Url::from_file_path(sf.path()).ok()?, map_range(sf, range)))
 }
 
 pub fn map_node(node: &SyntaxNode) -> Option<lsp_types::Range> {
     let range = node.text_range();
+    // shorten range to not include trailing WS:
+    let range = TextRange::new(
+        range.start(),
+        last_non_ws_token(node).map(|t| t.text_range().end()).unwrap_or(range.end()),
+    );
     node.source_file().map(|sf| map_range(sf, range))
 }
 
@@ -43,13 +44,46 @@ pub fn map_range(sf: &SourceFile, range: TextRange) -> lsp_types::Range {
     lsp_types::Range::new(map_position(sf, range.start()), map_position(sf, range.end()))
 }
 
-pub fn invalid_url() -> lsp_types::Url {
-    lsp_types::Url::parse("invalid:///").unwrap()
+pub fn map_to_offset(sf: &SourceFile, position: lsp_types::Position) -> usize {
+    sf.offset(
+        usize::try_from(position.line).unwrap() + 1,
+        usize::try_from(position.character).unwrap() + 1,
+    )
 }
 
-#[test]
-fn test_invalid_url() {
-    assert_eq!(invalid_url().scheme(), "invalid");
+pub fn map_to_offsets(sf: &SourceFile, range: lsp_types::Range) -> (usize, usize) {
+    (map_to_offset(sf, range.start), map_to_offset(sf, range.end))
+}
+
+// Find the last token that is not a Whitespace in a `SyntaxNode`. May return
+// `None` if the node contains no tokens or they are all Whitespace.
+pub fn last_non_ws_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    let mut last_non_ws = None;
+    let mut token = node.first_token();
+    while let Some(t) = token {
+        if t.text_range().end() > node.text_range().end() {
+            break;
+        }
+
+        if t.kind() != SyntaxKind::Whitespace {
+            last_non_ws = Some(t.clone());
+        }
+        token = t.next_token();
+    }
+    last_non_ws
+}
+
+// Find the indentation of the element node itself as well as the indentation of properties inside the
+// element. Returns the element indent.
+pub fn find_element_indent(element: &common::ElementRcNode) -> Option<String> {
+    let mut token = element.with_element_node(|node| node.first_token()?.prev_token());
+    while let Some(t) = token {
+        if t.kind() == SyntaxKind::Whitespace && t.text().contains('\n') {
+            return t.text().split('\n').last().map(|s| s.to_owned());
+        }
+        token = t.prev_token();
+    }
+    None
 }
 
 /// Given a node within an element, return the Type for the Element under that node.
@@ -102,7 +136,7 @@ impl ExpressionContextInfo {
 
 /// Run the function with the LookupCtx associated with the token
 pub fn with_lookup_ctx<R>(
-    document_cache: &DocumentCache,
+    document_cache: &common::DocumentCache,
     node: SyntaxNode,
     f: impl FnOnce(&mut LookupCtx) -> R,
 ) -> Option<R> {
@@ -112,7 +146,7 @@ pub fn with_lookup_ctx<R>(
 
 /// Run the function with the LookupCtx associated with the token
 pub fn with_property_lookup_ctx<R>(
-    document_cache: &DocumentCache,
+    document_cache: &common::DocumentCache,
     expr_context_info: &ExpressionContextInfo,
     f: impl FnOnce(&mut LookupCtx) -> R,
 ) -> Option<R> {
@@ -121,10 +155,10 @@ pub fn with_property_lookup_ctx<R>(
         expr_context_info.property_name.as_str(),
         expr_context_info.is_animate,
     );
-    let global_tr = document_cache.documents.global_type_registry.borrow();
+    let global_tr = document_cache.global_type_registry();
     let tr = element
         .source_file()
-        .and_then(|sf| document_cache.documents.get_document(sf.path()))
+        .and_then(|sf| document_cache.get_document_for_source_file(sf))
         .map(|doc| &doc.local_registry)
         .unwrap_or(&global_tr);
 
@@ -147,7 +181,7 @@ pub fn with_property_lookup_ctx<R>(
         loop {
             scope.push(it.clone());
             if let Some(c) = it.clone().borrow().children.iter().find(|c| {
-                c.borrow().node.as_ref().map_or(false, |n| n.text_range().contains(offset))
+                c.borrow().debug.first().map_or(false, |n| n.node.text_range().contains(offset))
             }) {
                 it = c.clone();
             } else {
@@ -180,6 +214,7 @@ pub fn with_property_lookup_ctx<R>(
     lookup_context.property_name = Some(prop_name);
     lookup_context.property_type = ty.unwrap_or_default();
     lookup_context.component_scope = &scope;
+    lookup_context.current_token = Some((**element).clone().into());
 
     if let Some(cb) = element
         .CallbackConnection()
@@ -211,15 +246,20 @@ fn lookup_expression_context(mut n: SyntaxNode) -> Option<ExpressionContextInfo>
         }
         match n.kind() {
             SyntaxKind::Binding | SyntaxKind::TwoWayBinding | SyntaxKind::CallbackConnection => {
-                let parent = n.parent()?;
+                let mut parent = n.parent()?;
                 if parent.kind() == SyntaxKind::PropertyAnimation {
                     let prop_name = i_slint_compiler::parser::identifier_text(&n)?;
                     let element = syntax_nodes::Element::new(parent.parent()?)?;
                     break (element, prop_name, true);
                 } else {
-                    let prop_name = i_slint_compiler::parser::identifier_text(&n)?;
-                    let element = syntax_nodes::Element::new(parent)?;
-                    break (element, prop_name, false);
+                    let prop_name =
+                        i_slint_compiler::parser::identifier_text(&n).unwrap_or_default();
+                    loop {
+                        if let Some(element) = syntax_nodes::Element::new(parent.clone()) {
+                            return Some(ExpressionContextInfo::new(element, prop_name, false));
+                        }
+                        parent = parent.parent()?;
+                    }
                 }
             }
             SyntaxKind::Function => {
@@ -269,5 +309,33 @@ fn to_lsp_diag_level(level: DiagnosticLevel) -> lsp_types::DiagnosticSeverity {
         DiagnosticLevel::Error => lsp_types::DiagnosticSeverity::ERROR,
         DiagnosticLevel::Warning => lsp_types::DiagnosticSeverity::WARNING,
         _ => lsp_types::DiagnosticSeverity::INFORMATION,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::language::test::loaded_document_cache;
+
+    #[test]
+    fn test_find_element_indent() {
+        let (dc, url, _) = loaded_document_cache(
+            r#"component MainWindow inherits Window {
+    VerticalBox {
+        label := Text { text: "text"; }
+    }
+}"#
+            .to_string(),
+        );
+
+        let window = dc.element_at_position(&url, &lsp_types::Position::new(0, 30));
+        assert_eq!(find_element_indent(&window.unwrap()), None);
+
+        let vbox = dc.element_at_position(&url, &lsp_types::Position::new(1, 4));
+        assert_eq!(find_element_indent(&vbox.unwrap()), Some("    ".to_string()));
+
+        let label = dc.element_at_position(&url, &lsp_types::Position::new(2, 17));
+        assert_eq!(find_element_indent(&label.unwrap()), Some("        ".to_string()));
     }
 }

@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 /*!
 The module responsible for the code generation.
@@ -16,17 +16,18 @@ use crate::expression_tree::{BindingExpression, Expression};
 use crate::langtype::ElementType;
 use crate::namedreference::NamedReference;
 use crate::object_tree::{Component, Document, ElementRc};
+use crate::CompilerConfiguration;
 
 #[cfg(feature = "cpp")]
-mod cpp;
+pub mod cpp;
 
 #[cfg(feature = "rust")]
 pub mod rust;
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OutputFormat {
     #[cfg(feature = "cpp")]
-    Cpp,
+    Cpp(cpp::Config),
     #[cfg(feature = "rust")]
     Rust,
     Interpreter,
@@ -37,7 +38,9 @@ impl OutputFormat {
     pub fn guess_from_extension(path: &std::path::Path) -> Option<Self> {
         match path.extension().and_then(|ext| ext.to_str()) {
             #[cfg(feature = "cpp")]
-            Some("cpp") | Some("cxx") | Some("h") | Some("hpp") => Some(Self::Cpp),
+            Some("cpp") | Some("cxx") | Some("h") | Some("hpp") => {
+                Some(Self::Cpp(cpp::Config::default()))
+            }
             #[cfg(feature = "rust")]
             Some("rs") => Some(Self::Rust),
             _ => None,
@@ -50,7 +53,7 @@ impl std::str::FromStr for OutputFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             #[cfg(feature = "cpp")]
-            "cpp" => Ok(Self::Cpp),
+            "cpp" => Ok(Self::Cpp(cpp::Config::default())),
             #[cfg(feature = "rust")]
             "rust" => Ok(Self::Rust),
             "llr" => Ok(Self::Llr),
@@ -63,24 +66,20 @@ pub fn generate(
     format: OutputFormat,
     destination: &mut impl std::io::Write,
     doc: &Document,
+    compiler_config: &CompilerConfiguration,
 ) -> std::io::Result<()> {
     #![allow(unused_variables)]
     #![allow(unreachable_code)]
 
-    if matches!(doc.root_component.root_element.borrow().base_type, ElementType::Error) {
-        // empty document, nothing to generate
-        return Ok(());
-    }
-
     match format {
         #[cfg(feature = "cpp")]
-        OutputFormat::Cpp => {
-            let output = cpp::generate(doc);
+        OutputFormat::Cpp(config) => {
+            let output = cpp::generate(doc, config, compiler_config);
             write!(destination, "{}", output)?;
         }
         #[cfg(feature = "rust")]
         OutputFormat::Rust => {
-            let output = rust::generate(doc);
+            let output = rust::generate(doc, compiler_config);
             write!(destination, "{}", output)?;
         }
         OutputFormat::Interpreter => {
@@ -90,7 +89,7 @@ pub fn generate(
             )); // Perhaps byte code in the future?
         }
         OutputFormat::Llr => {
-            let root = crate::llr::lower_to_item_tree::lower_to_item_tree(&doc.root_component);
+            let root = crate::llr::lower_to_item_tree::lower_to_item_tree(doc, compiler_config);
             let mut output = String::new();
             crate::llr::pretty_print::pretty_print(&root, &mut output).unwrap();
             write!(destination, "{output}")?;
@@ -115,6 +114,7 @@ pub trait ItemTreeBuilder {
     fn push_component_placeholder_item(
         &mut self,
         item: &crate::object_tree::ElementRc,
+        container_count: u32, // Must start at repeater.len()!
         parent_index: u32,
         component_state: &Self::SubComponentState,
     );
@@ -163,7 +163,17 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
         build_item_tree::<T>(sub_component, &sub_compo_state, builder);
     } else {
         let mut repeater_count = 0;
-        visit_item(initial_state, &root_component.root_element, 1, &mut repeater_count, 0, builder);
+        let mut container_count =
+            repeater_count_in_sub_component(&root_component.root_element) as u32;
+        visit_item(
+            initial_state,
+            &root_component.root_element,
+            1,
+            &mut repeater_count,
+            &mut container_count,
+            0,
+            builder,
+        );
 
         visit_children(
             initial_state,
@@ -175,6 +185,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
             1,
             1,
             &mut repeater_count,
+            &mut container_count,
             builder,
         );
     }
@@ -193,6 +204,15 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
         count
     }
 
+    // Number of repeaters in this sub component
+    fn repeater_count_in_sub_component(e: &ElementRc) -> usize {
+        let mut count = if e.borrow().repeated.is_some() { 0 } else { 1 };
+        for i in &e.borrow().children {
+            count += repeater_count_in_sub_component(i);
+        }
+        count
+    }
+
     fn visit_children<T: ItemTreeBuilder>(
         state: &T::SubComponentState,
         children: &[ElementRc],
@@ -203,11 +223,12 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
         children_offset: u32,
         relative_children_offset: u32,
         repeater_count: &mut u32,
+        container_count: &mut u32,
         builder: &mut T,
     ) {
         debug_assert_eq!(
             relative_parent_index,
-            parent_item.borrow().item_index.get().map(|x| *x as u32).unwrap_or(parent_index)
+            *parent_item.borrow().item_index.get().unwrap_or(&parent_index)
         );
 
         // Suppose we have this:
@@ -241,6 +262,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
                     children_offset,
                     relative_children_offset,
                     repeater_count,
+                    container_count,
                     builder,
                 );
                 return;
@@ -260,12 +282,21 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
                     &sub_component.root_element,
                     offset,
                     repeater_count,
+                    container_count,
                     parent_index,
                     builder,
                 );
                 sub_component_states.push_back(sub_component_state);
             } else {
-                visit_item(state, child, offset, repeater_count, parent_index, builder);
+                visit_item(
+                    state,
+                    child,
+                    offset,
+                    repeater_count,
+                    container_count,
+                    parent_index,
+                    builder,
+                );
             }
             offset += item_sub_tree_size(child) as u32;
         }
@@ -289,6 +320,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
                     offset,
                     1,
                     repeater_count,
+                    container_count,
                     builder,
                 );
             } else {
@@ -302,6 +334,7 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
                     offset,
                     relative_offset,
                     repeater_count,
+                    container_count,
                     builder,
                 );
             }
@@ -319,11 +352,17 @@ pub fn build_item_tree<T: ItemTreeBuilder>(
         item: &ElementRc,
         children_offset: u32,
         repeater_count: &mut u32,
+        container_count: &mut u32,
         parent_index: u32,
         builder: &mut T,
     ) {
         if item.borrow().is_component_placeholder {
-            builder.push_component_placeholder_item(item, parent_index, component_state);
+            builder.push_component_placeholder_item(
+                item,
+                *container_count,
+                parent_index,
+                component_state,
+            );
         } else if item.borrow().repeated.is_some() {
             builder.push_repeated_item(item, *repeater_count, parent_index, component_state);
             *repeater_count += 1;

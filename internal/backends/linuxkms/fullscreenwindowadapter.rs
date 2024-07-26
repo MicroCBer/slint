@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! This module contains the window adapter implementation to communicate between Slint and Vulkan + libinput
 
@@ -8,26 +8,38 @@ use std::pin::Pin;
 use std::rc::Rc;
 
 use i_slint_core::api::{LogicalPosition, PhysicalSize as PhysicalWindowSize};
-use i_slint_core::graphics::Image;
+use i_slint_core::graphics::{euclid, Image};
 use i_slint_core::item_rendering::ItemRenderer;
+use i_slint_core::lengths::LogicalRect;
 use i_slint_core::platform::WindowEvent;
 use i_slint_core::slice::Slice;
 use i_slint_core::Property;
 use i_slint_core::{platform::PlatformError, window::WindowAdapter};
 
+use crate::display::RenderingRotation;
+
 pub trait FullscreenRenderer {
     fn as_core_renderer(&self) -> &dyn i_slint_core::renderer::Renderer;
+    fn is_ready_to_present(&self) -> bool;
     fn render_and_present(
         &self,
+        rotation: RenderingRotation,
         draw_mouse_cursor_callback: &dyn Fn(&mut dyn ItemRenderer),
+        ready_for_next_animation_frame: Box<dyn FnOnce()>,
     ) -> Result<(), PlatformError>;
     fn size(&self) -> PhysicalWindowSize;
+    fn register_page_flip_handler(
+        &self,
+        event_loop_handle: crate::calloop_backend::EventLoopHandle,
+    ) -> Result<(), PlatformError>;
 }
 
 pub struct FullscreenWindowAdapter {
     window: i_slint_core::api::Window,
     renderer: Box<dyn FullscreenRenderer>,
-    needs_redraw: Cell<bool>,
+    redraw_requested: Cell<bool>,
+    needs_redraw_after_present: Cell<bool>,
+    rotation: RenderingRotation,
 }
 
 impl WindowAdapter for FullscreenWindowAdapter {
@@ -36,7 +48,7 @@ impl WindowAdapter for FullscreenWindowAdapter {
     }
 
     fn size(&self) -> i_slint_core::api::PhysicalSize {
-        self.renderer.size()
+        self.rotation.screen_size_to_rotated_window_size(self.renderer.size())
     }
 
     fn renderer(&self) -> &dyn i_slint_core::renderer::Renderer {
@@ -44,7 +56,7 @@ impl WindowAdapter for FullscreenWindowAdapter {
     }
 
     fn request_redraw(&self) {
-        self.needs_redraw.set(true)
+        self.redraw_requested.set(true)
     }
 
     fn set_visible(&self, visible: bool) -> Result<(), PlatformError> {
@@ -60,31 +72,84 @@ impl WindowAdapter for FullscreenWindowAdapter {
 }
 
 impl FullscreenWindowAdapter {
-    pub fn new(renderer: Box<dyn FullscreenRenderer>) -> Result<Rc<Self>, PlatformError> {
+    pub fn new(
+        renderer: Box<dyn FullscreenRenderer>,
+        rotation: RenderingRotation,
+    ) -> Result<Rc<Self>, PlatformError> {
+        let size = renderer.size();
+        let rotation_degrees = rotation.degrees();
+        eprintln!(
+            "Rendering at {}x{}{}",
+            size.width,
+            size.height,
+            if rotation_degrees != 0. {
+                format!(" with {} rotation_degrees rotation", rotation_degrees)
+            } else {
+                String::new()
+            }
+        );
         Ok(Rc::<FullscreenWindowAdapter>::new_cyclic(|self_weak| FullscreenWindowAdapter {
             window: i_slint_core::api::Window::new(self_weak.clone()),
             renderer,
-            needs_redraw: Cell::new(true),
+            redraw_requested: Cell::new(true),
+            needs_redraw_after_present: Cell::new(false),
+            rotation,
         }))
     }
 
     pub fn render_if_needed(
-        &self,
+        self: Rc<Self>,
         mouse_position: Pin<&Property<Option<LogicalPosition>>>,
     ) -> Result<(), PlatformError> {
-        if self.needs_redraw.replace(false) {
-            self.renderer.render_and_present(&|item_renderer| {
-                if let Some(mouse_position) = mouse_position.get() {
-                    item_renderer.save_state();
-                    item_renderer.translate(
-                        i_slint_core::lengths::logical_point_from_api(mouse_position).to_vector(),
-                    );
-                    item_renderer.draw_image_direct(mouse_cursor_image());
-                    item_renderer.restore_state();
-                }
-            })?;
+        if !self.renderer.is_ready_to_present() {
+            return Ok(());
+        }
+        if self.redraw_requested.replace(false) {
+            self.renderer.render_and_present(
+                self.rotation,
+                &|item_renderer| {
+                    if let Some(mouse_position) = mouse_position.get() {
+                        let cursor_image = mouse_cursor_image();
+                        item_renderer.save_state();
+                        item_renderer.translate(
+                            i_slint_core::lengths::logical_point_from_api(mouse_position)
+                                .to_vector(),
+                        );
+                        item_renderer.draw_image_direct(mouse_cursor_image());
+                        item_renderer.restore_state();
+                        let cursor_rect = LogicalRect::new(
+                            euclid::point2(mouse_position.x, mouse_position.y),
+                            euclid::Size2D::from_untyped(cursor_image.size().cast()),
+                        );
+                        self.renderer.as_core_renderer().mark_dirty_region(cursor_rect.into());
+                    }
+                },
+                Box::new({
+                    let self_weak = Rc::downgrade(&self);
+                    move || {
+                        let Some(this) = self_weak.upgrade() else {
+                            return;
+                        };
+                        if this.needs_redraw_after_present.replace(false) {
+                            this.request_redraw();
+                        }
+                    }
+                }),
+            )?;
+            // Check once after rendering if we have running animations and
+            // remember that to trigger a redraw after the frame is on the screen.
+            // Timers might have been updated if the event loop is woken up
+            // due to other reasons, which would also reset has_active_animations.
+            self.needs_redraw_after_present.set(self.window.has_active_animations());
         }
         Ok(())
+    }
+
+    pub fn register_event_loop(
+        &self,
+        event_loop_handle: crate::calloop_backend::EventLoopHandle,
+    ) -> Result<(), PlatformError> {
+        self.renderer.register_page_flip_handler(event_loop_handle)
     }
 }
 

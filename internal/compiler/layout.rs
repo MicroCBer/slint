@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Datastructures used to represent layouts in the compiler
 
@@ -493,7 +493,7 @@ pub fn layout_info_type() -> Type {
                     .map(|s| (s.to_string(), Type::Float32)),
             )
             .collect(),
-        name: Some("LayoutInfo".into()),
+        name: Some("slint::private_api::LayoutInfo".into()),
         node: None,
         rust_attributes: None,
     }

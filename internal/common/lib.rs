@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 #![doc = include_str!("README.md")]
 #![doc(html_logo_url = "https://slint.dev/logo/slint-logo-square-light.svg")]
@@ -24,7 +24,11 @@ pub fn get_native_style(has_qt: bool, target: &str) -> &'static str {
     } else if target.contains("wasm") {
         "fluent"
     } else if target.contains("linux") | target.contains("bsd") {
-        if has_qt { "qt" } else { "fluent" }.into()
+        if has_qt {
+            "qt"
+        } else {
+            "fluent"
+        }
     } else if cfg!(target_os = "android") {
         "material"
     } else if cfg!(target_os = "windows") {

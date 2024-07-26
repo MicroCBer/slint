@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 // cSpell: ignore powf
 
@@ -7,15 +7,12 @@ use std::rc::Rc;
 
 use crossterm::style::Stylize;
 
-use i_slint_core::{
-    graphics::{
-        euclid::{self, Box2D, Point2D},
-        IntRect, Rgb8Pixel, SharedPixelBuffer,
-    },
-    item_rendering::DirtyRegion,
-    platform::PlatformError,
-    renderer::RendererSealed,
-    software_renderer::{LineBufferProvider, MinimalSoftwareWindow, WindowRotation},
+use i_slint_core::graphics::{euclid, IntRect, Rgb8Pixel, SharedPixelBuffer};
+use i_slint_core::lengths::LogicalRect;
+use i_slint_core::platform::PlatformError;
+use i_slint_core::renderer::RendererSealed;
+use i_slint_core::software_renderer::{
+    LineBufferProvider, MinimalSoftwareWindow, RenderingRotation,
 };
 
 pub struct SwrTestingBackend {
@@ -58,14 +55,14 @@ pub fn image_buffer(path: &str) -> Result<SharedPixelBuffer<Rgb8Pixel>, image::I
 
 pub fn screenshot(
     window: Rc<MinimalSoftwareWindow>,
-    rotated: WindowRotation,
+    rotated: RenderingRotation,
 ) -> SharedPixelBuffer<Rgb8Pixel> {
     let size = window.size();
     let width = size.width;
     let height = size.height;
 
     let mut buffer = match rotated {
-        WindowRotation::Rotate90 | WindowRotation::Rotate270 => {
+        RenderingRotation::Rotate90 | RenderingRotation::Rotate270 => {
             SharedPixelBuffer::<Rgb8Pixel>::new(height, width)
         }
         _ => SharedPixelBuffer::<Rgb8Pixel>::new(width, height),
@@ -74,13 +71,12 @@ pub fn screenshot(
     // render to buffer
     window.request_redraw();
     window.draw_if_needed(|renderer| {
-        renderer.mark_dirty_region(Box2D::new(
-            Point2D::new(0., 0.),
-            Point2D::new(width as f32, height as f32),
-        ));
-        renderer.set_window_rotation(rotated);
+        renderer.mark_dirty_region(
+            LogicalRect::from_size(euclid::size2(width as f32, height as f32)).into(),
+        );
+        renderer.set_rendering_rotation(rotated);
         renderer.render(buffer.make_mut_slice(), width as usize);
-        renderer.set_window_rotation(WindowRotation::NoRotation);
+        renderer.set_rendering_rotation(RenderingRotation::NoRotation);
     });
 
     buffer
@@ -122,12 +118,15 @@ fn color_difference(lhs: &Rgb8Pixel, rhs: &Rgb8Pixel) -> f32 {
 pub struct TestCaseOptions {
     /// How much we allow the maximum pixel difference to be when operating a screen rotation
     pub rotation_threshold: f32,
+
+    /// When true, we don't compare screenshots rendered with clipping
+    pub skip_clipping: bool,
 }
 
 fn compare_images(
     reference_path: &str,
     screenshot: &SharedPixelBuffer<Rgb8Pixel>,
-    rotated: WindowRotation,
+    rotated: RenderingRotation,
     options: &TestCaseOptions,
 ) -> Result<(), String> {
     let compare = || {
@@ -141,17 +140,18 @@ fn compare_images(
                 screenshot.size()
             ));
         }
-        if reference.as_bytes() == screenshot.as_bytes() && rotated != WindowRotation::NoRotation {
+        if reference.as_bytes() == screenshot.as_bytes() && rotated != RenderingRotation::NoRotation
+        {
             return Ok(());
         }
 
         let idx = |x: u32, y: u32| -> u32 {
             match rotated {
-                WindowRotation::Rotate90 => x * reference.width() + reference.width() - y - 1,
-                WindowRotation::Rotate180 => {
+                RenderingRotation::Rotate90 => (reference.height() - x - 1) * reference.width() + y,
+                RenderingRotation::Rotate180 => {
                     (reference.height() - y - 1) * reference.width() + reference.width() - x - 1
                 }
-                WindowRotation::Rotate270 => (reference.height() - x - 1) * reference.width() + y,
+                RenderingRotation::Rotate270 => x * reference.width() + reference.width() - y - 1,
                 _ => y * reference.width() + x,
             }
         };
@@ -164,7 +164,8 @@ fn compare_images(
             )
         };
 
-        let (failed_pixel_count, max_color_difference) = if rotated != WindowRotation::NoRotation {
+        let (failed_pixel_count, max_color_difference) = if rotated != RenderingRotation::NoRotation
+        {
             let mut failure_count = 0usize;
             let mut max_color_difference = 0.0f32;
             for y in 0..screenshot.height() {
@@ -187,8 +188,8 @@ fn compare_images(
             return Ok(());
         }
         let percentage_different = failed_pixel_count * 100 / reference.as_slice().len();
-        if rotated != WindowRotation::NoRotation
-            && (percentage_different <= 1 || max_color_difference < options.rotation_threshold)
+        if rotated != RenderingRotation::NoRotation
+            && (percentage_different < 1 || max_color_difference < options.rotation_threshold)
         {
             return Ok(());
         }
@@ -224,7 +225,7 @@ fn compare_images(
     let result = compare();
 
     if result.is_err()
-        && rotated == WindowRotation::NoRotation
+        && rotated == RenderingRotation::NoRotation
         && std::env::var("SLINT_CREATE_SCREENSHOTS").map_or(false, |var| var == "1")
     {
         eprintln!("saving rendered image as comparison to reference failed");
@@ -247,10 +248,10 @@ pub fn assert_with_render(
     options: &TestCaseOptions,
 ) {
     for rotation in [
-        WindowRotation::NoRotation,
-        WindowRotation::Rotate180,
-        WindowRotation::Rotate90,
-        WindowRotation::Rotate270,
+        RenderingRotation::NoRotation,
+        RenderingRotation::Rotate180,
+        RenderingRotation::Rotate90,
+        RenderingRotation::Rotate270,
     ] {
         let rendering = screenshot(window.clone(), rotation);
         if let Err(reason) = compare_images(path, &rendering, rotation, options) {
@@ -268,7 +269,7 @@ pub fn assert_with_render_by_line(
     let mut rendering = SharedPixelBuffer::<Rgb8Pixel>::new(s.width, s.height);
 
     screenshot_render_by_line(window.clone(), None, &mut rendering);
-    if let Err(reason) = compare_images(path, &rendering, WindowRotation::NoRotation, options) {
+    if let Err(reason) = compare_images(path, &rendering, RenderingRotation::NoRotation, options) {
         panic!("Image comparison failure for line-by-line rendering for {path}: {reason}");
     }
 
@@ -284,8 +285,12 @@ pub fn assert_with_render_by_line(
         ));
     }
     screenshot_render_by_line(window, Some(region.cast()), &mut rendering);
-    if let Err(reason) = compare_images(path, &rendering, WindowRotation::NoRotation, options) {
-        panic!("Partial rendering image comparison failure for line-by-line rendering for {path}: {reason}");
+    if !options.skip_clipping {
+        if let Err(reason) =
+            compare_images(path, &rendering, RenderingRotation::NoRotation, options)
+        {
+            panic!("Partial rendering image comparison failure for line-by-line rendering for {path}: {reason}");
+        }
     }
 }
 
@@ -299,12 +304,15 @@ pub fn screenshot_render_by_line(
 
     window.draw_if_needed(|renderer| {
         match region {
-            None => renderer.mark_dirty_region(Box2D::new(
-                euclid::point2(0., 0.),
-                euclid::point2(buffer.width() as f32, buffer.height() as f32),
-            )),
+            None => renderer.mark_dirty_region(
+                LogicalRect::from_size(euclid::size2(
+                    buffer.width() as f32,
+                    buffer.height() as f32,
+                ))
+                .into(),
+            ),
             Some(r) => renderer.mark_dirty_region(
-                DirtyRegion::from_untyped(&r.to_box2d().cast()) / window.scale_factor(),
+                (euclid::Rect::from_untyped(&r.cast()) / window.scale_factor()).into(),
             ),
         }
         renderer.render_by_line(TestingLineBuffer {
@@ -316,7 +324,7 @@ pub fn screenshot_render_by_line(
 }
 
 pub fn save_screenshot(path: &str, window: Rc<MinimalSoftwareWindow>) {
-    let buffer = screenshot(window.clone(), WindowRotation::NoRotation);
+    let buffer = screenshot(window.clone(), RenderingRotation::NoRotation);
     image::save_buffer(
         path,
         buffer.as_bytes(),

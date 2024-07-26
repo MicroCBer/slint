@@ -1,5 +1,5 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use crate::dynamic_item_tree::InstanceRef;
 use crate::eval::{self, ComponentInstance, EvalLocalContext};
@@ -14,7 +14,6 @@ use i_slint_core::layout::{self as core_layout};
 use i_slint_core::model::RepeatedItemTree;
 use i_slint_core::slice::Slice;
 use i_slint_core::window::WindowAdapter;
-use std::convert::TryInto;
 use std::rc::Rc;
 use std::str::FromStr;
 
@@ -201,7 +200,7 @@ fn box_layout_data(
             rep.0.as_ref().ensure_updated(|| {
                 let instance = crate::dynamic_item_tree::instantiate(
                     rep.1.clone(),
-                    Some(component.borrow()),
+                    component.self_weak().get().cloned(),
                     None,
                     None,
                     Default::default(),

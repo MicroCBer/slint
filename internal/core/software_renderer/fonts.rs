@@ -1,7 +1,8 @@
 // Copyright © SixtyFPS GmbH <info@slint.dev>
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-1.1 OR LicenseRef-Slint-commercial
+// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 use alloc::rc::Rc;
+#[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
@@ -10,6 +11,7 @@ use crate::thread_local_ as thread_local;
 
 use super::{PhysicalLength, PhysicalSize};
 use crate::graphics::{BitmapFont, FontRequest};
+use crate::items::TextWrap;
 use crate::lengths::{LogicalLength, LogicalSize, ScaleFactor};
 use crate::textlayout::TextLayout;
 use crate::Coord;
@@ -123,13 +125,13 @@ pub fn match_font(request: &FontRequest, scale_factor: ScaleFactor) -> Font {
     pixelfont::PixelFont { bitmap_font: font, glyphs: matching_glyphs }.into()
 }
 
-pub fn text_layout_for_font<'a, Font: crate::textlayout::AbstractFont>(
+pub fn text_layout_for_font<'a, Font>(
     font: &'a Font,
     font_request: &FontRequest,
     scale_factor: ScaleFactor,
 ) -> TextLayout<'a, Font>
 where
-    Font: crate::textlayout::TextShaper<Length = PhysicalLength>,
+    Font: crate::textlayout::AbstractFont + crate::textlayout::TextShaper<Length = PhysicalLength>,
 {
     let letter_spacing =
         font_request.letter_spacing.map(|spacing| (spacing.cast() * scale_factor).cast());
@@ -146,6 +148,7 @@ pub fn text_size(
     text: &str,
     max_width: Option<LogicalLength>,
     scale_factor: ScaleFactor,
+    text_wrap: TextWrap,
 ) -> LogicalSize {
     let font = match_font(&font_request, scale_factor);
     let (longest_line_width, height) = match font {
@@ -154,6 +157,7 @@ pub fn text_size(
             layout.text_size(
                 text,
                 max_width.map(|max_width| (max_width.cast() * scale_factor).cast()),
+                text_wrap,
             )
         }
         #[cfg(all(feature = "software-renderer-systemfonts", not(target_arch = "wasm32")))]
@@ -162,6 +166,7 @@ pub fn text_size(
             layout.text_size(
                 text,
                 max_width.map(|max_width| (max_width.cast() * scale_factor).cast()),
+                text_wrap,
             )
         }
     };
