@@ -9,7 +9,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: PACKAGE VERSION\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2024-07-25 03:05+0000\n"
+"POT-Creation-Date: 2024-07-27 03:13+0000\n"
 "PO-Revision-Date: 2023-06-06 13:52+0000\n"
 "Last-Translator: Olivier Goffart <olivier.goffart@slint-ui.com>, 2023\n"
 "Language-Team: French (https://app.transifex.com/slint/teams/170022/fr/)\n"
@@ -122,50 +122,50 @@ msgctxt "ListViewPage"
 msgid "StandardListView"
 msgstr "StandardTableView"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "Lorem"
 msgstr "Lorem"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "ipsum"
 msgstr "ipsum"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "dolor"
 msgstr "dolor"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "sit"
 msgstr "sit"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "amet"
 msgstr "amet"
 
-#: ui/pages/list_view_page.slint:38 ui/pages/list_view_page.slint:39
-#: ui/pages/list_view_page.slint:40 ui/pages/list_view_page.slint:41
-#: ui/pages/list_view_page.slint:42 ui/pages/list_view_page.slint:43
-#: ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:39 ui/pages/list_view_page.slint:40
+#: ui/pages/list_view_page.slint:41 ui/pages/list_view_page.slint:42
+#: ui/pages/list_view_page.slint:43 ui/pages/list_view_page.slint:44
+#: ui/pages/list_view_page.slint:45
 msgctxt "ListViewPage"
 msgid "consetetur"
 msgstr "consetetur"
